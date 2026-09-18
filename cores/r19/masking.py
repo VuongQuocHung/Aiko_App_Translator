@@ -105,6 +105,9 @@ def prepare_postprocess_chapter(chapter):
 
     for field in ("title", "content", "title_translation", "translation"):
         copy[field] = matcher.sub(replace, str(copy.get(field, "")))
+    for segment in copy.get("_translation_segments", []):
+        for field in ("title", "content", "title_translation", "translation"):
+            segment[field] = matcher.sub(replace, str(segment.get(field, "")))
     return copy, entries, restore_map
 
 

@@ -20,7 +20,7 @@ from cores.gemini.interactions import stream_interaction
 from cores.gemini import current_gemini_api_key
 from cores.config.runtime import chapter_limit, option, stop_requested, web_mode
 from cores.postprocess import run_post_translation_pipeline
-from cores.translation.runner import run_single_translation
+from cores.translation.runner import MAX_CHAPTER_ATTEMPTS, run_single_translation
 from cores.translation import stage as translation_stage
 
 
@@ -174,42 +174,25 @@ def postprocess_interactions(chapter, chapter_number, context_text="", pronoun_c
         _stage = None
 
 
-def _run_translation_with_retry():
-    while not stop_requested():
-        try:
-            return run_single_translation(
-                translate_interactions,
-                RAW_DIR,
-                TRANSLATED_DIR,
-                CONTEXT_JSON,
-                postprocess=postprocess_interactions,
-            ) or 0
-        except Exception as exc:
-            message = str(exc)
-            retryable = any(
-                marker in message.lower()
-                for marker in (
-                    "408", "429", "500", "502", "503", "504",
-                    "high demand", "timed out", "timeout", "temporarily unavailable",
-                )
-            )
-            if not retryable:
-                raise
-            print(f"⚠️ Lỗi tạm thời khi dịch: {message}")
-            print("⏳ Thử lại sau 5 giây...")
-            for _ in range(5):
-                if stop_requested():
-                    return 0
-                time.sleep(1)
-    return 0
+def _run_translation_with_retry(skipped_chapters=None):
+    return run_single_translation(
+        translate_interactions,
+        RAW_DIR,
+        TRANSLATED_DIR,
+        CONTEXT_JSON,
+        postprocess=postprocess_interactions,
+        skipped_chapters=skipped_chapters,
+        max_attempts=MAX_CHAPTER_ATTEMPTS,
+    ) or 0
 
 
 def main():
     translation_stage.TRANSPORT_OVERRIDES["gemini-api"] = call_interactions
     print("Gemini Interactions Streaming — Pipeline 1.0 (Beta)")
     limit, processed = chapter_limit(), 0
+    skipped_chapters = set()
     while not stop_requested():
-        count = _run_translation_with_retry()
+        count = _run_translation_with_retry(skipped_chapters)
         processed += count
         if not count or (web_mode() and limit is not None and processed >= limit):
             break

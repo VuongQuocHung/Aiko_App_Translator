@@ -13,6 +13,8 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+from cores.retry import chapter_retry_managed
+
 
 AI_STUDIO_URL = "https://aistudio.google.com/prompts/new_chat"
 DEFAULT_MODEL = "gemini-flash-latest"
@@ -343,6 +345,8 @@ def generate_content(
             raise TimeoutException("Quá thời gian chờ Google AI Studio trả lời")
         except Exception as error:
             last_error = error
+            if chapter_retry_managed():
+                raise
             if attempt + 1 < max_retries:
                 time.sleep(3)
     raise ValueError(f"Google AI Studio Web thất bại: {last_error}")

@@ -41,23 +41,18 @@ class TranslationCharacterTests(unittest.TestCase):
             flush=True,
         )
 
-    def test_interactions_keeps_running_after_high_demand_error(self):
-        error = RuntimeError("currently experiencing high demand")
-        with patch.object(interactions, "run_single_translation", side_effect=[error, 1]), patch.object(
-            interactions, "stop_requested", return_value=False
-        ), patch.object(interactions.time, "sleep") as sleep:
-            self.assertEqual(interactions._run_translation_with_retry(), 1)
-        self.assertEqual(sleep.call_count, 5)
+    def test_interactions_uses_shared_three_attempt_chapter_retry(self):
+        skipped_chapters = set()
+        with patch.object(interactions, "run_single_translation", return_value=1) as run:
+            self.assertEqual(
+                interactions._run_translation_with_retry(skipped_chapters), 1
+            )
 
-    def test_interactions_does_not_retry_non_transient_error(self):
-        with patch.object(
-            interactions, "run_single_translation", side_effect=ValueError("bad payload")
-        ), patch.object(interactions, "stop_requested", return_value=False), patch.object(
-            interactions.time, "sleep"
-        ) as sleep:
-            with self.assertRaisesRegex(ValueError, "bad payload"):
-                interactions._run_translation_with_retry()
-        sleep.assert_not_called()
+        self.assertIs(run.call_args.kwargs["skipped_chapters"], skipped_chapters)
+        self.assertEqual(
+            run.call_args.kwargs["max_attempts"],
+            interactions.MAX_CHAPTER_ATTEMPTS,
+        )
 
     def test_interactions_delegates_to_shared_postprocess_pipeline(self):
         chapter = {

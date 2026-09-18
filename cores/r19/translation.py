@@ -4,6 +4,7 @@ import json
 import re
 
 from cores.r19 import storage
+from cores.retry import chapter_retry_managed
 
 TOKEN_PATTERN = re.compile(r"__20AGE_\d{4}__")
 
@@ -71,6 +72,8 @@ def request_word_translation(
             translation = parse_fragment_translation(response)
         except Exception as error:
             logger(prompt, response, False)
+            if chapter_retry_managed():
+                raise
             if _is_4xx_error(error) and attempt < attempts - 1:
                 switcher()
                 print(f"Dịch R19: đổi API key và thử lại ({attempt + 2}/{attempts})...")

@@ -4,21 +4,22 @@ import { charactersPrompt, contextPrompt, geminiRetryAction, generateContent, pa
 describe("Gemini prompts", () => {
   it("matches the local default prompt and keeps dynamic translation context", () => {
     const value = translationPrompt({ title: "제목", source: "원문", context: "glossary: []", pronouns: "Ta / ngươi", previousChapters: "Chương trước", from: "Tiếng Hàn", to: "Tiếng Việt" });
-    expect(value.systemInstruction).toBe("");
+    expect(value.systemInstruction).toContain("GLOSSARY FORMATTING RULES");
     expect(value.prompt).toContain("원문");
     expect(value.prompt).toContain("glossary: []");
     expect(value.prompt).toContain("Ta / ngươi");
     expect(value.prompt).toContain("###END###");
-    expect(value.prompt).toContain("# 🌸 Vai trò");
+    expect(value.systemInstruction).toContain("biên tập viên dịch thuật");
     expect(value.prompt).toContain("# 🎯 Nhiệm vụ");
   });
 
   it("uses the translation and polish prompts edited for the project", () => {
     const translation = translationPrompt({ title: "제목", source: "원문", context: "", pronouns: "", previousChapters: "", from: "Hàn", to: "Việt", role: "Vai trò riêng", task: "Nhiệm vụ riêng" });
     const polish = polishPrompt("원문", "Bản dịch", "", "Vai trò hiệu đính", "Nhiệm vụ hiệu đính");
-    expect(translation.prompt).toContain("Vai trò riêng");
+    expect(translation.systemInstruction).toContain("Vai trò riêng");
     expect(translation.prompt).toContain("Nhiệm vụ riêng");
-    expect(polish.systemInstruction).toBe("Vai trò hiệu đính");
+    expect(polish.systemInstruction).toContain("Vai trò hiệu đính");
+    expect(polish.systemInstruction).toContain("GLOSSARY FORMATTING RULES");
     expect(polish.prompt).toContain("Nhiệm vụ hiệu đính");
   });
 

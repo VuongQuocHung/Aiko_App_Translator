@@ -27,6 +27,7 @@ class GeminiApiProvider(ProviderAdapter):
                 (item["content"] for item in documents if item["name"] == "pronouns_snapshot.json"),
                 None,
             ),
+            **({"system_instruction": request.system_instruction} if request.system_instruction else {}),
             **request.options,
         )
         return ProviderResponse(str(text or ""), self.id, request.model)

@@ -1,6 +1,22 @@
 const $=selector=>document.querySelector(selector);
 const $$=selector=>[...document.querySelectorAll(selector)];
 
+export function glossaryLine(item) {
+  const base=`${item.source} = ${item.target}`;
+  if(!item.extended&&!item.first_vi&&!item.first_en&&!item.brackets&&(!item.type||item.type==='Unknown')&&!Object.keys(item.extra_metadata||{}).length)return base;
+  return base+` | type=${item.type||'Unknown'} | first_vi=${item.first_vi?'yes':'no'} | first_en=${item.first_en?'yes':'no'} | brackets=${item.brackets?'yes':'no'}`+Object.entries(item.extra_metadata||{}).map(([key,value])=>` | ${key}=${value}`).join('');
+}
+
+function glossaryTargetOnly(item) {
+  return String(item.type||'').trim().toLowerCase()==='common'||['yes','true'].includes(String(item.extra_metadata?.target_only||'no').trim().toLowerCase());
+}
+
+function glossaryModeLabel(item) {
+  if(String(item.type||'').trim().toLowerCase()==='common')return 'Common: luôn dùng bản dịch';
+  if(glossaryTargetOnly(item))return 'target_only=yes: chỉ dùng bản dịch';
+  return item.extended?'Giữ thuật ngữ English':'Định dạng cũ: dịch nguồn → đích';
+}
+
 export function createProjectMemoryFeature({api,escapeHtml,executePipeline,getSetting,markdownToHtml,navigationCounts,prettyName,saveChapter,state,toast}) {
   let pronounEditIndex=null;
   let reviewLoadingChapter=null;
@@ -151,7 +167,11 @@ export function createProjectMemoryFeature({api,escapeHtml,executePipeline,getSe
     const items=(context.glossary||[]).map((item,index)=>({...item,index})).filter(item=>!query||item.source.toLowerCase().includes(query)||item.target.toLowerCase().includes(query));
     $('#contextSummary').textContent=state.project?`${state.project} · context đến chương ${context.index||0}`:'Chưa chọn truyện.';
     $('#glossaryCount').textContent=`${items.length}/${(context.glossary||[]).length} thuật ngữ`;
-    $('#glossaryList').innerHTML=items.length?items.map(item=>`<div class="glossary-row" data-glossary-index="${item.index}"><input data-glossary-field="source" value="${escapeHtml(item.source)}" placeholder="Nguyên văn" aria-label="Nguyên văn thuật ngữ"><i>→</i><input data-glossary-field="target" value="${escapeHtml(item.target)}" placeholder="Bản dịch" aria-label="Bản dịch thuật ngữ"><button type="button" data-delete-glossary aria-label="Xóa ${escapeHtml(item.source||'thuật ngữ')}">Xóa</button></div>`).join(''):'<div class="memory-empty">Không có thuật ngữ phù hợp.</div>';
+    $('#glossaryList').innerHTML=items.length?items.map(item=>{
+      const common=String(item.type||'').trim().toLowerCase()==='common';
+      const targetOnly=glossaryTargetOnly(item);
+      return `<div class="glossary-row" data-glossary-index="${item.index}"><input data-glossary-field="source" value="${escapeHtml(item.source)}" placeholder="Nguyên văn" aria-label="Nguyên văn thuật ngữ"><i>→</i><input data-glossary-field="target" value="${escapeHtml(item.target)}" placeholder="Bản dịch" aria-label="Bản dịch thuật ngữ"><button type="button" data-delete-glossary aria-label="Xóa ${escapeHtml(item.source||'thuật ngữ')}">Xóa</button><div class="glossary-metadata"><label>Type <input data-glossary-field="type" value="${escapeHtml(item.type||'Unknown')}" placeholder="Skill, Name, Alias…" aria-label="Loại thuật ngữ"></label><label class="target-only-control ${targetOnly?'active':''}" title="${common?'Type Common luôn chỉ xuất bản dịch':'Chỉ xuất phần đích, không giữ nguyên văn hoặc chú giải song ngữ'}"><input type="checkbox" data-glossary-field="target_only" aria-label="Chỉ xuất bản dịch (target_only)" ${targetOnly?'checked':''} ${common?'disabled':''}> Target only</label><label><input type="checkbox" data-glossary-field="first_vi" ${item.first_vi?'checked':''}> Chú giải Việt lần đầu</label><label><input type="checkbox" data-glossary-field="first_en" ${item.first_en?'checked':''}> Chú giải English lần đầu</label><label><input type="checkbox" data-glossary-field="brackets" ${item.brackets?'checked':''}> Ngoặc vuông</label><span data-glossary-mode>${escapeHtml(glossaryModeLabel(item))}</span></div></div>`;
+    }).join(''):'<div class="memory-empty">Không có thuật ngữ phù hợp.</div>';
     $('#saveGlossaryButton').disabled=!state.glossaryDirty;
     $('#glossarySaveState').textContent=state.glossaryDirty?'Có thay đổi chưa lưu':'Đã đồng bộ';
     $('#styleNotes').textContent=context.style_notes||'Chưa có style note cho truyện này.';
@@ -174,7 +194,7 @@ export function createProjectMemoryFeature({api,escapeHtml,executePipeline,getSe
   
   async function saveGlossaryChanges() {
     if(!requireProject())return;
-    const items=(state.context.glossary||[]).map(item=>({source:String(item.source||'').trim(),target:String(item.target||'').trim()}));
+    const items=(state.context.glossary||[]).map(item=>({...item,source:String(item.source||'').trim(),target:String(item.target||'').trim()}));
     const invalid=items.findIndex(item=>!item.source||!item.target||item.source.includes('='));
     if(invalid>=0)return toast(`Thuật ngữ dòng ${invalid+1} cần đủ nguyên văn và bản dịch; nguyên văn không được chứa dấu =`);
     const button=$('#saveGlossaryButton');button.disabled=true;button.textContent='Đang lưu…';
@@ -201,7 +221,7 @@ export function createProjectMemoryFeature({api,escapeHtml,executePipeline,getSe
     $('#contextIndexEditor').max=state.chapters.length||0;
     $('#contextIndexHint').textContent=`Đã xử lý ${state.context.index||0}/${state.chapters.length||0} chương.`;
     $('#contextStyleEditor').value=state.context.style_notes||'';
-    $('#contextGlossaryEditor').value=(state.context.glossary||[]).map(item=>`${item.source} = ${item.target}`).join('\n');
+    $('#contextGlossaryEditor').value=(state.context.glossary||[]).map(glossaryLine).join('\n');
     renderPromptPresets();
     $('#contextPromptRole').value=state.context.prompt_role||'';
     $('#contextPromptTask').value=state.context.prompt_task||'';
@@ -283,7 +303,7 @@ export function createProjectMemoryFeature({api,escapeHtml,executePipeline,getSe
   }
   
   function updateContextEditorStatus() {
-    const glossary=$('#contextGlossaryEditor').value.split(/\r?\n/).filter(line=>line.trim());
+    const glossary=$('#contextGlossaryEditor').value.split(/\r?\n/).filter(line=>line.trim()&&!line.trim().startsWith('#'));
     const invalid=glossary.filter(line=>{const [source,...target]=line.split('=');return !source?.trim()||!target.join('=').trim();});
     $('#contextGlossaryCount').textContent=`${glossary.length} thuật ngữ`;
     $('#contextGlossaryTabCount').textContent=glossary.length;
@@ -411,7 +431,29 @@ export function createProjectMemoryFeature({api,escapeHtml,executePipeline,getSe
       if(!input||!row)return;
       const item=state.context.glossary[Number(row.dataset.glossaryIndex)];
       if(!item)return;
-      item[input.dataset.glossaryField]=input.value;
+      const field=input.dataset.glossaryField;
+      if(field==='target_only'){
+        item.extra_metadata={...(item.extra_metadata||{})};
+        if(input.checked){
+          item.extra_metadata.target_only='yes';
+          item.first_vi=false;item.first_en=false;item.brackets=false;
+          row.querySelector('[data-glossary-field="first_vi"]').checked=false;
+          row.querySelector('[data-glossary-field="first_en"]').checked=false;
+          row.querySelector('[data-glossary-field="brackets"]').checked=false;
+        }else delete item.extra_metadata.target_only;
+        item.extended=true;
+      }else{
+        item[field]=input.type==='checkbox'?input.checked:input.value;
+        if(field==='first_vi'&&input.checked){item.first_en=false;row.querySelector('[data-glossary-field="first_en"]').checked=false;}
+        if(field==='first_en'&&input.checked){item.first_vi=false;row.querySelector('[data-glossary-field="first_vi"]').checked=false;}
+        if(['type','first_vi','first_en','brackets'].includes(field))item.extended=true;
+      }
+      const common=String(item.type||'').trim().toLowerCase()==='common';
+      const targetOnly=glossaryTargetOnly(item);
+      const targetOnlyInput=row.querySelector('[data-glossary-field="target_only"]');
+      targetOnlyInput.checked=targetOnly;targetOnlyInput.disabled=common;
+      targetOnlyInput.closest('label').classList.toggle('active',targetOnly);
+      row.querySelector('[data-glossary-mode]').textContent=glossaryModeLabel(item);
       markGlossaryDirty();
     };
     $('#glossaryList').onclick=event=>{

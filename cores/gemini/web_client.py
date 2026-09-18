@@ -19,6 +19,7 @@ from cores.gemini.web_controls import (
     select_thinking_level,
     select_thinking_model,
 )
+from cores.retry import chapter_retry_managed
 
 
 def normalize_web_model(value):
@@ -241,6 +242,8 @@ def generate_content(
 
         except Exception as e:
             print(f"⚠️ Lỗi Selenium lần {attempt + 1}/{max_retries}: {e}")
+            if chapter_retry_managed():
+                raise
             if attempt < max_retries - 1:
                 time.sleep(5)
                 try:

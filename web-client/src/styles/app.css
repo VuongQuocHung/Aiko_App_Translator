@@ -616,3 +616,7 @@ body { background: #101412; color: #e9efeb; }
 @media (min-width: 641px) {
   .mobile-editor-switch { display: none!important; }
 }
+.glossary-metadata { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 4px; font-size: 12px; }
+.glossary-metadata label { display: flex; align-items: center; gap: 5px; }
+.glossary-metadata input:not([type="checkbox"]) { width: 120px; }
+.glossary-metadata input[type="checkbox"] { width: auto; }

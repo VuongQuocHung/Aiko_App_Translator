@@ -1,0 +1,7 @@
+# Legacy and metadata entries can coexist.
+Lucid = Lucid
+Chain of Heart = Xiềng Xích Trái Tim | type=Skill | first_vi=yes | brackets=yes
+Awakened = Thức Tỉnh | type=Rank | first_vi=yes | brackets=yes
+Fate Essence = Tinh Hoa Vận Mệnh | type=Concept | first_vi=yes | brackets=no
+Shield = Khiên | type=Artifact | first_vi=no | brackets=yes
+The Chain of Heart = Xiềng Xích Trái Tim | type=Alias | first_vi=yes | brackets=yes | canonical=Chain of Heart

@@ -1,4 +1,15 @@
-export interface GenerateOptions {
+import { parse } from "yaml";
+import { GLOSSARY_RULES } from "./glossary";
+import { fitNovelRequest } from "./requestBudget";
+import type { BudgetRequest } from "./requestBudget";
+
+function glossarySystem(role: string, context: string) {
+  let style = "";
+  try { const data = parse(context); style = String(data?.style_notes || ""); } catch { /* Plain context is still included in the user request. */ }
+  return `${role}\n\n# Style Prompt\n${style}\n\n${GLOSSARY_RULES}`;
+}
+
+export interface GenerateOptions extends BudgetRequest {
   apiKey: string;
   model: string;
   maxOutputTokens?: number | null;
@@ -63,6 +74,7 @@ function interactionReferencePart(document: NonNullable<GenerateOptions["documen
 }
 
 export async function generateContent(options: GenerateOptions): Promise<string> {
+  options = fitNovelRequest(options);
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(options.model)}:generateContent`;
   const response = await fetch(endpoint, {
     method: "POST",
@@ -96,6 +108,7 @@ export async function generateContent(options: GenerateOptions): Promise<string>
 }
 
 export async function streamInteraction(options: StreamOptions): Promise<string> {
+  options = fitNovelRequest(options);
   const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions?alt=sse", {
     method: "POST",
     headers: {
@@ -210,13 +223,9 @@ Không tự thêm định dạng Markdown. Phải giữ nguyên Markdown ảnh h
 
 export function translationPrompt(input: TranslationPromptInput) {
   return {
-    systemInstruction: "",
-    prompt: `# 🌸 Vai trò
-${input.role?.trim() || DEFAULT_TRANSLATION_ROLE}
-
----
-
-# 🎯 Nhiệm vụ
+    stage: "translate" as const, sourceText: input.source, contextText: input.context,
+    systemInstruction: glossarySystem(input.role?.trim() || DEFAULT_TRANSLATION_ROLE, input.context),
+    prompt: `# 🎯 Nhiệm vụ
 ${input.task?.trim() || DEFAULT_TRANSLATION_TASK}
 
 ---
@@ -307,7 +316,8 @@ export const DEFAULT_POLISH_TASK = `Nhiệm vụ là BIÊN TẬP LẠI bản d�
 
 export function polishPrompt(source: string, translation: string, context: string, role?: string, task?: string) {
   return {
-    systemInstruction: role?.trim() || DEFAULT_POLISH_ROLE,
+    stage: "polish" as const, sourceText: source, relevanceText: source + "\n" + translation, contextText: context,
+    systemInstruction: glossarySystem(role?.trim() || DEFAULT_POLISH_ROLE, context),
     prompt: `${task?.trim() || DEFAULT_POLISH_TASK}\n\n# Context V1\n${context || "(Chưa có)"}\n\n# Nguyên tác\n${source}\n\n# Bản dịch cần hiệu đính\n${translation}`,
   };
 }

@@ -1,5 +1,8 @@
 """Orchestration for the legacy post-translation pipeline."""
 
+from cores.postprocess.glossary import validate_and_correct
+from cores.stages.budget import ContextBudgetError
+
 
 def run_post_translation_pipeline(
     runtime,
@@ -29,23 +32,30 @@ def run_post_translation_pipeline(
     if runtime.enabled("polish"):
         # ── Bước 1: Biên tập trau chuốt + chỉnh xưng hô ──
         print(f"[PIPELINE] Bước 1 — Biên tập trau chuốt...")
-        title_polished, content_polished = runtime.polish_translation(
-            chapter,
-            chapter_number,
-            context_text,
-            pronoun_context,
-            pronouns_file=pronouns_file,
-        )
+        try:
+            title_polished, content_polished = runtime.polish_translation(
+                chapter, chapter_number, context_text, pronoun_context,
+                pronouns_file=pronouns_file,
+            )
+        except ContextBudgetError as error:
+            print(f"[POLISH] Chưa hiệu đính: {error}. Giữ bản nháp.")
+            chapter["proofreading_warning"] = str(error)
+            title_polished, content_polished = title_fixed, content_fixed
         chapter["title_translation"] = title_polished
         chapter["translation"] = content_polished
 
         # ── Bước 2: Xét sót ngôn ngữ ──
         print(f"[PIPELINE] Bước 2 — Xét sót ngôn ngữ...")
-        title_fixed, content_fixed = runtime.fix_translation(
-            chapter, chapter_number, context_text, pronoun_context
-        )
+        if not chapter.get("proofreading_warning"):
+            title_fixed, content_fixed = runtime.fix_translation(
+                chapter, chapter_number, context_text, pronoun_context
+            )
     else:
         print("[PIPELINE] Bỏ qua hậu dịch vì chưa cấu hình model.")
+    chapter["title_translation"] = title_fixed
+    chapter["translation"] = content_fixed
+
+    title_fixed, content_fixed = validate_and_correct(runtime, chapter, context_text)
     chapter["title_translation"] = title_fixed
     chapter["translation"] = content_fixed
 
@@ -56,5 +66,6 @@ def run_post_translation_pipeline(
     else:
         print("[PIPELINE] Bỏ qua xuất xưng hô vì công đoạn đã tắt.")
 
-    print(f"[PIPELINE] ✅ Hoàn tất hậu xử lý chương {chapter_number}")
+    status = "✅" if chapter["glossary_validation"]["passed"] else "⚠️ Còn lỗi glossary — cần kiểm tra"
+    print(f"[PIPELINE] {status} Hoàn tất hậu xử lý chương {chapter_number}")
     return title_fixed, content_fixed

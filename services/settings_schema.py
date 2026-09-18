@@ -17,6 +17,10 @@ DEFAULT_REVIEW_BG_CRITERIA = """1. Thiếu nội dung: chỉ báo khi một ý, 
 5. Ngoại ngữ: chỉ báo khi ký tự hoặc câu ngoại ngữ thực sự còn xuất hiện trong bản dịch; không dùng văn bản nguồn làm bằng chứng cho lỗi này.
 6. Chỉ nêu lỗi khi có dẫn chứng cụ thể trong cả bản gốc và bản dịch; không suy đoán hoặc bắt lỗi khác biệt diễn đạt thuần túy."""
 SETTING_DEFAULTS = {
+    "review_retranslate_enabled": "on",
+    "review_retranslate_threshold": 9,
+    "translate_context_tokens": 128000,
+    "polish_context_tokens": 128000,
     "pipeline_translate_provider": "gemini-api",
     "pipeline_translate_model": "gemini-flash-latest",
     "pipeline_translate_thinking": "high",
@@ -88,6 +92,10 @@ SETTING_DEFAULTS = {
     "lan_pin": "",
 }
 SETTING_LABELS = {
+    "review_retranslate_enabled": "Tự động hiệu đính lần 2",
+    "review_retranslate_threshold": "Hiệu đính khi điểm dưới",
+    "translate_context_tokens": "Ngân sách context model dịch (token)",
+    "polish_context_tokens": "Ngân sách context model hiệu đính (token)",
     "pipeline_translate_provider": "Provider dịch",
     "pipeline_translate_model": "Model",
     "pipeline_translate_thinking": "Cấp độ suy nghĩ",
@@ -160,6 +168,9 @@ SETTING_LABELS = {
 }
 SECRET_SETTINGS = {"hako_password", "r2_access_key_id", "r2_secret_access_key", "share_r2_access_key_id", "share_r2_secret_access_key", "gpt_api_key", "lan_pin"}
 SETTING_RANGES = {
+    "review_retranslate_threshold": (1, 10),
+    "translate_context_tokens": (4096, 10000000),
+    "polish_context_tokens": (4096, 10000000),
     "fix_max_retry": (1, 20),
     "previous_context_chapters": (0, 20),
     "gpt_api_max_output_tokens": (1000, 128000),
@@ -167,6 +178,10 @@ SETTING_RANGES = {
     "gpt_api_retries": (1, 10),
 }
 SETTING_META = {
+    "review_retranslate_enabled": {"group": "pipeline", "type": "select", "options": [["on", "Bật"], ["off", "Tắt"]], "description": "Chờ review sau khi lưu chương và tự động hiệu đính khi điểm thấp hơn ngưỡng đã chọn."},
+    "review_retranslate_threshold": {"group": "pipeline", "inputmode": "numeric", "description": "Chỉ hiệu đính lần 2 khi review có lỗi và điểm thấp hơn ngưỡng này. Bản cũ được giữ trong file .before-review.bak."},
+    "translate_context_tokens": {"group": "pipeline", "description": "Ngân sách context bảo thủ cho model dịch đang chọn, gồm input và output. Điều chỉnh theo giới hạn thực của model."},
+    "polish_context_tokens": {"group": "pipeline", "description": "Ngân sách context cho model hiệu đính và sửa glossary. Correction dùng provider/model hiệu đính."},
     "pipeline_translate_provider": {"group": "pipeline", "type": "select", "options": [["gemini-api", "Gemini API"], ["gemini-web", "Gemini Web"], ["google-ai-studio-web", "Google AI Studio Web"], ["openai-api", "OpenAI API"], ["chatgpt-web", "ChatGPT Web"]]},
     "pipeline_translate_model": {"group": "pipeline"},
     "pipeline_translate_thinking": {"group": "pipeline"},

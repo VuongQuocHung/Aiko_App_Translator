@@ -2,20 +2,19 @@
 
 import os
 
-from cores.context.glossary import filter_glossary
+from cores.context.glossary import filter_glossary, parse_glossary
 from cores.storage.project import load_context
 from cores.pronouns import _name_matches_glossary, load_pronouns
 
 
 def find_glossary_targets(file_path, raw_text="", pronouns_file=None):
-    if not os.path.exists(file_path):
+    if not os.path.exists(file_path) and not os.path.exists(os.path.join(os.path.dirname(file_path), "glossary.txt")):
         return []
     context = load_context(os.path.dirname(file_path))
     targets = []
-    for line in filter_glossary(context.get("glossary", ""), raw_text).splitlines():
-        _source, separator, target = line.partition("=")
-        target = target.strip()
-        if separator and target and target not in targets:
+    for entry in parse_glossary(filter_glossary(context.get("glossary", ""), raw_text)):
+        target = entry.vietnamese
+        if target not in targets:
             targets.append(target)
 
     if not pronouns_file:

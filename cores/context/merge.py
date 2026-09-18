@@ -1,5 +1,8 @@
 """Merge generated glossary text into project context state."""
 
+from dataclasses import replace
+from cores.context.glossary import parse_glossary, serialize_glossary
+
 
 def merge_context(old, new_text):
     if not new_text.strip():
@@ -13,12 +16,13 @@ def merge_context(old, new_text):
         start = new_text.index("###START###") + len("###START###")
         new_text = new_text[start:]
 
-    new_lines = [line.strip() for line in new_text.splitlines() if line.strip()]
-    old_lines = str(old.get("glossary", "")).splitlines()
-    merged = []
-    for line in old_lines + new_lines:
-        if line.strip() and line not in merged:
-            merged.append(line)
-
-    old["glossary"] = "\n".join(merged).strip()
+    previous = {entry.english: entry for entry in parse_glossary(str(old.get("glossary", "")))}
+    incoming = []
+    for entry in parse_glossary(new_text):
+        existing = previous.get(entry.english)
+        if existing and existing.extended and not entry.extended:
+            entry = replace(existing, vietnamese=entry.vietnamese)
+        incoming.append(entry)
+    old["glossary"] = serialize_glossary(parse_glossary(
+        serialize_glossary(previous.values()) + "\n" + serialize_glossary(incoming)))
     return old

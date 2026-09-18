@@ -7,7 +7,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from cores.job_events import emit_job_event
+from cores.retry import managed_chapter_attempt
 from cores.storage.project import load_json, save_json
+
+
+MAX_BACKGROUND_REVIEW_ATTEMPTS = 3
 
 
 def build_reference_documents(*args, **kwargs):
@@ -109,19 +113,29 @@ def run_background_review(
     model, _thinking = runtime.model_and_thinking("review")
 
     try:
-        while True:
+        for attempt in range(1, MAX_BACKGROUND_REVIEW_ATTEMPTS + 1):
             try:
-                text, provider, model = runtime.generate("review", prompt, documents)
+                # Review has its own finite budget. Disable transport-level retry
+                # loops so one review attempt really means one request.
+                with managed_chapter_attempt():
+                    text, provider, model = runtime.generate(
+                        "review", prompt, documents
+                    )
                 break
             except Exception as exc:
                 error = str(exc)
                 if "408" in error or any(code in error for code in ["500", "502", "503", "504"]):
+                    if attempt >= MAX_BACKGROUND_REVIEW_ATTEMPTS:
+                        raise
                     print(f"[REVIEW BG] Lỗi API tạm thời, giữ key và thử lại: {error}")
                     time.sleep(10)
                     continue
                 if "429" in error or "RESOURCE_EXHAUSTED" in error:
+                    if attempt >= MAX_BACKGROUND_REVIEW_ATTEMPTS:
+                        raise
                     if provider == "gemini-api":
-                        runtime.switch_key_for("review")
+                        if not getattr(exc, "_novel_key_rotated", False):
+                            runtime.switch_key_for("review")
                         print(f"[REVIEW BG] Hết quota, đổi key và thử lại: {error}")
                     else:
                         print(f"[REVIEW BG] Bị giới hạn tần suất, thử lại: {error}")
@@ -131,6 +145,8 @@ def run_background_review(
                     re.search(r"\b4\d\d\b", error)
                     or any(code in error for code in ["PERMISSION_DENIED", "UNAUTHENTICATED"])
                 ):
+                    if attempt >= MAX_BACKGROUND_REVIEW_ATTEMPTS:
+                        raise
                     print(f"[REVIEW BG] Lỗi API 4xx, đổi key và thử lại: {error}")
                     runtime.switch_key_for("review")
                     time.sleep(15)
@@ -184,6 +200,7 @@ def run_background_review(
                 runtime._latest_review_tokens.pop(chapter_id, None)
         print(f"[REVIEW BG] ✅ Đã lưu review chương {chapter_id} vào {runtime.REVIEW_JSON}")
         emit_job_event("review_saved", chapter=chapter_id)
+        return existing[chapter_id]
 
     except Exception as e:
         runtime.log_api_call(
@@ -206,11 +223,20 @@ def enqueue_background_review(runtime, chapter, chapter_number, context_text="")
     review_token = object()
     with runtime._review_lock:
         runtime._latest_review_tokens[chapter_id] = review_token
+        if chapter.get("_review_retry"):
+            # The old score belongs to the backup, not the newly saved text.
+            existing = load_json(runtime.REVIEW_JSON, {})
+            existing[chapter_id] = {
+                "chapter_number": chapter_number, "score": None,
+                "issue_count": 0, "issues": [],
+                "summary": "Bản hiệu đính lần 2 đã lưu; đang chờ review mới.",
+            }
+            save_json(runtime.REVIEW_JSON, existing, backup=True)
     provider = runtime.provider("review")
     model, _thinking = runtime.model_and_thinking("review")
     print(f"[PIPELINE] Đã xếp review nền {chapter_id} ({provider}:{model}).")
     if provider in {"gemini-web", "chatgpt-web", "google-ai-studio-web"}:
-        run_background_review(
+        return run_background_review(
             runtime,
             chapter_id,
             chapter_number,
@@ -221,7 +247,6 @@ def enqueue_background_review(runtime, chapter, chapter_number, context_text="")
             review_token,
             chapter.get("title", ""),
         )
-        return None
     if runtime._review_executor is None:
         runtime._review_executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="review-bg"

@@ -97,8 +97,19 @@ def save_translated_md(raw_filepath, translated_dir, title, content):
         translated_index += 1
 
     output_path = os.path.join(translated_dir, os.path.basename(raw_filepath))
-    with open(output_path, "w", encoding="utf-8") as handle:
-        handle.write("\n".join(output))
+    temporary_path = output_path + ".tmp"
+    try:
+        with open(temporary_path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(output))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, output_path)
+    finally:
+        if os.path.exists(temporary_path):
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
     return output_path
 
 

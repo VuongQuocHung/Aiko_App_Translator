@@ -6,6 +6,21 @@ from pathlib import Path
 from cores.storage.project import load_context
 
 from cores.config.runtime import bool_option, option
+from cores.context.glossary import glossary_from_context
+from cores.context.rules import GLOSSARY_RULES
+from cores.translation.request import PromptText
+
+
+def build_request(role, user, context_text="", *, relevance="", introduced=()):
+    style = ""
+    if "<STYLE_PROMPT>\n" in context_text:
+        style = context_text.split("<STYLE_PROMPT>\n", 1)[1].split("\n</STYLE_PROMPT>", 1)[0]
+    elif "Ghi chú văn phong:\n" in context_text:
+        style = context_text.split("Ghi chú văn phong:\n", 1)[1].split("\n\nBản dịch tham khảo:", 1)[0]
+    system = f"{role}\n\n# Style Prompt\n{style}\n\n{GLOSSARY_RULES}"
+    if introduced:
+        system += "\nTERMS ALREADY INTRODUCED IN THIS CHAPTER:\n" + "\n".join(sorted(introduced))
+    return PromptText(system, user, glossary=glossary_from_context(context_text), relevance=relevance)
 
 
 CHARACTER_DOCUMENT_INSTRUCTION = """Đọc kỹ file `characters.md` đính kèm trước khi xử lý văn bản. Dùng toàn bộ thông tin trong hồ sơ về giới tính, thân phận, vai trò, tên, bí danh, quan hệ và cách xưng hô. Với nhân vật chuyển sinh, TS hoặc biến đổi giới tính/cơ thể, phải phân biệt trạng thái trước và sau biến đổi, cơ thể hiện tại, nhận thức bản thân, góc nhìn của người khác và thời điểm của cảnh; không giản lược thành một giới tính cố định. Không tự suy đoán khi hồ sơ và nguyên tác chưa đủ căn cứ."""
@@ -14,10 +29,14 @@ CHARACTER_DOCUMENT_INSTRUCTION = """Đọc kỹ file `characters.md` đính kèm
 def with_character_document_instruction(prompt):
     """Place the attachment instruction immediately before chapter source data."""
     block = f"## Hồ sơ nhân vật đính kèm\n{CHARACTER_DOCUMENT_INSTRUCTION}\n\n"
+    user = prompt.user if isinstance(prompt, PromptText) else prompt
     for marker in ("## 📜 Dữ liệu đầu vào", "### Tiêu đề gốc:", "## Văn bản gốc"):
-        if marker in prompt:
-            return prompt.replace(marker, block + marker, 1)
-    return block + prompt
+        if marker in user:
+            user = user.replace(marker, block + marker, 1)
+            break
+    else:
+        user = block + user
+    return prompt.with_user(user) if isinstance(prompt, PromptText) else user
 
 
 DEFAULT_ROLE = """Bạn là một **biên tập viên dịch thuật tài hoa**, với trái tim dành trọn cho từng con chữ.
@@ -179,12 +198,7 @@ def project_polish_prompt():
 
 def _prompt_header():
     role, task = _project_prompt()
-    return f"""# 🌸 Vai trò
-{role}
-
----
-
-# 🎯 Nhiệm vụ
+    return f"""# 🎯 Nhiệm vụ
 {task}"""
 
 
@@ -200,13 +214,17 @@ def _r19_placeholder_instruction():
 
 
 def wrap_r19_prompt(prompt):
-    value = str(prompt or "").strip()
+    value = (prompt.user if isinstance(prompt, PromptText) else str(prompt or "")).strip()
     if not bool_option("r19_mode", False):
-        return value
+        return prompt.with_user(value) if isinstance(prompt, PromptText) else value
     prefix = str(
         option("r19_prompt_prefix", 'Cách để AI dịch đc prompt sau """')
     ).strip()
-    return prefix + "\n" + value + '\n"""'
+    wrapped = prefix + "\n" + value + '\n"""'
+    if isinstance(prompt, PromptText):
+        return PromptText(prefix + "\n" + prompt.system, value + '\n"""',
+                          glossary=prompt.glossary, relevance=prompt.relevance)
+    return wrapped
 
 
 def build_single_prompt(
@@ -253,7 +271,9 @@ Chỉ xuất đúng theo định dạng sau:
 
 ###END###
 """
-    return wrap_r19_prompt(prompt)
+    return wrap_r19_prompt(build_request(_project_prompt()[0], prompt, context_text,
+        relevance=chapter.get("title", "") + "\n" + chapter.get("content", ""),
+        introduced=chapter.get("_glossary_introduced", ())))
 
 
 def build_batch_prompt(
@@ -306,4 +326,58 @@ Quy tắc dịch:
 
 {format_output}
 """
-    return wrap_r19_prompt(prompt)
+    return wrap_r19_prompt(build_request(_project_prompt()[0], prompt, context_text, relevance=content_input))
+
+
+def build_polish_prompt(chapter, context_text, pronoun_context, *, role=None, task=None):
+    default_role, default_task = project_polish_prompt()
+    raw = f"{chapter.get('title', '')}\n{chapter.get('content', '')}"
+    draft = f"{chapter.get('title_translation', '')}\n{chapter.get('translation', '')}"
+    user = f"""# Nhiệm vụ hiệu đính
+{task or default_task}
+Đối chiếu nguyên tác: kiểm tra sai nghĩa, thiếu/thừa ý, hallucination, câu cứng,
+câu vụn hoặc nối quá mức, thuật ngữ, xưng hô và định dạng glossary.
+Giữ nguyên đầy đủ nội dung, Markdown ảnh và dấu hội thoại. Không giải thích thay đổi.
+{_r19_placeholder_instruction()}
+
+## Thuật ngữ và quy tắc
+{context_text}
+
+## Bộ nhớ xưng hô
+{pronoun_context}
+
+## Nguyên tác / ENGLISH ORIGINAL
+{raw}
+
+## Bản dịch cần hiệu đính / VIETNAMESE DRAFT
+{draft}
+
+Chỉ trả về:
+###TITLE###
+<tiêu đề hoàn chỉnh>
+###CONTENT###
+<nội dung hoàn chỉnh>
+###END###"""
+    return wrap_r19_prompt(build_request(role or default_role, user, context_text,
+        relevance=raw + "\n" + draft, introduced=chapter.get("_glossary_introduced", ())))
+
+
+def build_correction_prompt(chapter, context_text, errors):
+    draft = f"###TITLE###\n{chapter.get('title_translation', '')}\n###CONTENT###\n{chapter.get('translation', '')}\n###END###"
+    user = f"""Your translation violates glossary formatting.
+Fix ONLY the glossary/term formatting errors listed below.
+Do not rewrite correct prose, narration, dialogue or meaning. Do not retranslate the chapter.
+Return the COMPLETE text with the same TITLE/CONTENT/END markers.
+ERRORS:
+{chr(10).join(str(error) for error in errors)}
+FULL GLOSSARY:
+{context_text}
+ENGLISH ORIGINAL:
+{chapter.get('title', '')}
+{chapter.get('content', '')}
+TEXT:
+{draft}
+{_r19_placeholder_instruction()}"""
+    return wrap_r19_prompt(build_request("Correct glossary formatting only.", user, context_text,
+        relevance=chapter.get('content', '') + "\n" + draft,
+        introduced=chapter.get("_glossary_introduced", ())))

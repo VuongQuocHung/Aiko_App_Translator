@@ -1,6 +1,7 @@
 # User data and credentials
 .runtime/
 truyen/
+helpers/
 apikeys.txt
 /r19_words.txt
 /data/
@@ -16,6 +17,7 @@ release/
 /tmp/
 
 # Python and test caches
+.venv/
 __pycache__/
 *.py[cod]
 *.pyo

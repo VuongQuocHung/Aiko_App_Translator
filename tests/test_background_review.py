@@ -72,6 +72,14 @@ class BackgroundReviewTests(unittest.TestCase):
         self.assertEqual(generate.call_count, 2)
         switch.assert_not_called()
 
+    def test_review_stops_after_three_transient_failures(self):
+        generate, switch, _build = self._run(
+            [RuntimeError("503 unavailable")] * 3
+        )
+        self.assertEqual(generate.call_count, 3)
+        switch.assert_not_called()
+        self.assertFalse(Path(self.review_path).exists())
+
     def test_success_emits_review_saved_web_event(self):
         output = StringIO()
         with patch.dict("os.environ", {"NOVEL_WEB_MODE": "1"}), redirect_stdout(output):

@@ -7,6 +7,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from cores.config.runtime import int_option, option
+from cores.retry import chapter_retry_managed
 
 
 def _response_text(data):
@@ -27,7 +28,7 @@ def _response_text(data):
     return "\n".join(chunks).strip()
 
 
-def call_gpt_api(prompt, *, model, reasoning_effort, stage, document=None, documents=None):
+def call_gpt_api(prompt, *, model, reasoning_effort, stage, document=None, documents=None, system_instruction=None):
     api_key = str(option("gpt_api_key", "")).strip()
     endpoint = str(
         option("gpt_api_endpoint", "https://api.openai.com/v1/responses")
@@ -45,6 +46,8 @@ def call_gpt_api(prompt, *, model, reasoning_effort, stage, document=None, docum
         ),
     }
     attached_documents = list(documents or ([] if document is None else [document]))
+    if system_instruction:
+        payload["instructions"] = system_instruction
     attached_documents = [item for item in attached_documents if str(item.get("content", "")).strip()]
     if attached_documents:
         file_parts = []
@@ -98,6 +101,8 @@ def call_gpt_api(prompt, *, model, reasoning_effort, stage, document=None, docum
             )
             with urlopen(request, timeout=timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
+            if data.get("status") in {"incomplete", "failed", "cancelled"}:
+                raise RuntimeError(f"GPT API chưa hoàn tất bước {stage}: {data.get('status')}")
             text = _response_text(data)
             if not text:
                 raise RuntimeError("GPT API trả về nội dung trống.")
@@ -105,12 +110,12 @@ def call_gpt_api(prompt, *, model, reasoning_effort, stage, document=None, docum
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:1000]
             retryable = exc.code == 429 or exc.code >= 500
-            if not retryable or attempt == retries - 1:
+            if chapter_retry_managed() or not retryable or attempt == retries - 1:
                 raise RuntimeError(
                     f"GPT API lỗi HTTP {exc.code} ở bước {stage}: {detail}"
                 ) from exc
         except (URLError, TimeoutError, json.JSONDecodeError) as exc:
-            if attempt == retries - 1:
+            if chapter_retry_managed() or attempt == retries - 1:
                 raise RuntimeError(f"GPT API lỗi ở bước {stage}: {exc}") from exc
         wait = min(5 * (attempt + 1), 20)
         print(f"[GPT API] Thử lại sau {wait}s...")

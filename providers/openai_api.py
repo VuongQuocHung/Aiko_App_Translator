@@ -14,6 +14,7 @@ class OpenAiApiProvider(ProviderAdapter):
             reasoning_effort=request.thinking,
             stage=request.stage,
             documents=list(request.attachments) or None,
+            **({"system_instruction": request.system_instruction} if request.system_instruction else {}),
             **request.options,
         )
         return ProviderResponse(str(text or ""), self.id, request.model)

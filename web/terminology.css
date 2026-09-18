@@ -8,6 +8,12 @@
 .glossary-list { max-height: calc(100dvh - 235px); overflow: auto; }
 .glossary-row { display: grid; grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px 10px 18px; border-bottom: 1px solid var(--line); }
 .glossary-row:last-child { border-bottom: 0; }
+.glossary-metadata { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted); }
+.glossary-metadata label { display: flex; align-items: center; gap: 5px; }
+.glossary-metadata .target-only-control { padding: 3px 7px; border: 1px solid var(--line); border-radius: 6px; }
+.glossary-metadata .target-only-control.active { border-color: var(--accent); color: var(--accent); }
+.glossary-metadata input[type="checkbox"] { width: auto; }
+.glossary-metadata input[data-glossary-field="type"] { width: 130px; border-color: var(--line); }
 .glossary-row input { min-width: 0; width: 100%; padding: 9px 10px; border: 1px solid transparent; border-radius: 8px; outline: 0; background: transparent; color: var(--ink); font: inherit; }
 .glossary-row input:hover { border-color: var(--line); background: var(--bg); }
 .glossary-row input:focus { border-color: var(--accent); background: var(--bg); box-shadow: 0 0 0 3px rgba(23,126,104,.12); }

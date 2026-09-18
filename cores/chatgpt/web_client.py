@@ -19,6 +19,7 @@ from cores.chatgpt.web_response import (
     snapshot_conversation as _snapshot_chatgpt_conversation,
 )
 from cores.json_output import parse_complete_json_object
+from cores.retry import chapter_retry_managed
 
 
 END_MARKER_SETTLE_SECONDS = 3
@@ -256,6 +257,8 @@ def generate_content(
         except Exception as e:
             print(f"⚠️ Lỗi Selenium lần {attempt + 1}/{max_retries}: {e}")
             close_driver(close_orphans=True)
+            if chapter_retry_managed():
+                raise
             if attempt < max_retries - 1:
                 time.sleep(5)
             else:

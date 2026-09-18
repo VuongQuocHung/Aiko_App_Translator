@@ -5,6 +5,8 @@ import time
 
 from cores.storage.project import load_json, save_json
 from cores.stages.outputs import parse_title_content
+from cores.retry import chapter_retry_managed, managed_chapter_attempt
+from cores.translation.prompts import build_request
 
 
 def save_manual_check_id(chapter_id, file_path):
@@ -59,7 +61,11 @@ Nội dung dịch hiện tại:
 """)
         try:
             chapter_id_fix = chapter.get("id", f"chapter_{chapter_number}")
-            text, provider, effective_model = runtime.generate("polish", prompt)
+            prompt = build_request("Sửa phần sót ngoại ngữ; bảo toàn glossary và câu văn đúng.", prompt, context_text,
+                                   relevance=chapter.get("content", "") + "\n" + content,
+                                   introduced=chapter.get("_glossary_introduced", ()))
+            with managed_chapter_attempt():
+                text, provider, effective_model = runtime.generate("polish", prompt)
             if "###END###" in text:
                 title_out, content_out = parse_title_content(text, "Dịch lại")
                 chapter["title_translation"] = title_out
@@ -73,8 +79,13 @@ Nội dung dịch hiện tại:
                 )
                 attempt += 1
                 time.sleep(5)
+        except InterruptedError:
+            raise
         except Exception as e:
+            if chapter_retry_managed():
+                raise
             err = str(e)
+            attempt += 1
             if "429" in err and runtime.provider("polish") == "gemini-api":
                 runtime.switch_key_for("polish")
                 print("🔔 Chờ 30s rồi thử lại...")
@@ -84,7 +95,6 @@ Nội dung dịch hiện tại:
                 time.sleep(10)
             else:
                 print(f"⚠️ Lỗi khi dịch lại: {e}")
-                attempt += 1
                 time.sleep(10)
 
     print(

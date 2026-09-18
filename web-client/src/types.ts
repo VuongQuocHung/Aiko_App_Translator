@@ -5,6 +5,7 @@ export interface AiTaskSettings {
   model: string;
   maxOutputTokens: number | null;
   systemInstruction: string;
+  contextTokens?: number;
 }
 
 export interface Project {
@@ -24,9 +25,20 @@ export interface Project {
   glossaryBatchSize?: number;
   styleNotes?: string;
   pronouns?: string;
-  glossary?: Array<{ id: string; source: string; target: string }>;
+  glossary?: Array<GlossaryEntry & { id: string }>;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface GlossaryEntry {
+  source: string;
+  target: string;
+  type?: string;
+  first_vi?: boolean;
+  first_en?: boolean;
+  brackets?: boolean;
+  extended?: boolean;
+  extra_metadata?: Record<string, string>;
 }
 
 export interface Chapter {
@@ -37,6 +49,7 @@ export interface Chapter {
   source: string;
   translation: string;
   review?: string;
+  glossaryValidation?: { passed: boolean; errors: string[] };
   localFileName?: string;
   localReviewData?: Record<string, unknown>;
   localReviewText?: string;

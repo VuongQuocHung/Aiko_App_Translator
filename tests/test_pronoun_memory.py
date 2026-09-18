@@ -76,6 +76,25 @@ class PronounMemoryTests(unittest.TestCase):
             )
             self.assertEqual(load_pronouns(path), original)
 
+    def test_retry_replaces_same_chapter_records_instead_of_duplicating(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "pronouns.json"
+            response = '{"character_pairs":[{"speaker":"An","listener":"Bình","speaker_self":"tôi","speaker_to_listener":"cậu"}]}'
+            for _ in range(2):
+                update_pronoun_memory(
+                    "v1_c2_s1",
+                    2,
+                    "text",
+                    pronouns_file=path,
+                    model="test-model",
+                    generate=lambda _prompt: response,
+                    sleep=lambda _seconds: None,
+                )
+
+            timeline = load_pronouns(path)["An---Bình"]["timeline"]
+            self.assertEqual(len(timeline), 1)
+            self.assertEqual(timeline[0]["chapter_id"], "v1_c2_s1")
+
     def test_context_prefers_glossary_relevant_pairs(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "pronouns.json"

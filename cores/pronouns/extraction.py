@@ -5,6 +5,7 @@ import time
 
 from cores.pronouns.storage import load_pronouns, save_pronouns
 from cores.json_output import parse_complete_json_object
+from cores.retry import chapter_retry_managed
 
 
 def extract_pronouns_from_translation(
@@ -84,6 +85,8 @@ Lưu ý:
             message = str(error)
             print(f"⚠️ Lỗi khi trích xuất xưng hô: {message}")
             print(f"🔍 [DEBUG] raw_result_text là: {raw_result_text!r}")
+            if chapter_retry_managed():
+                raise
             if "Expecting value" in message:
                 print("🔔 Bỏ qua lỗi JSON rỗng để chương trình đi tiếp...")
                 return {}
@@ -110,6 +113,16 @@ def update_pronoun_memory(
         chapter_id, chapter_number, translation_text, model=model, generate=generate,
         switch_key=switch_key, sleep=sleep,
     )
+    # A whole-chapter retry can reach this point again after a later save error.
+    # Replace this chapter's generated records instead of appending duplicates.
+    for existing in memory.values():
+        if existing.get("locked"):
+            continue
+        existing["timeline"] = [
+            item
+            for item in existing.get("timeline", [])
+            if item.get("chapter_id") != chapter_id
+        ]
     updated_count = 0
     for key, data in new_pronouns.items():
         key_str = f"{key[0]}---{key[1]}"

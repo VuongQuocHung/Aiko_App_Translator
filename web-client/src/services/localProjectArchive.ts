@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import { parse, stringify } from "yaml";
 import type { Chapter, Project, ProjectAsset } from "../types";
+import { parseGlossary as parseGlossaryText, serializeGlossaryEntry } from "./glossary";
 
 export interface LocalProjectArchive {
   project: Project;
@@ -45,13 +46,7 @@ function chapterTitle(text: string, fallback: string) {
 
 function parseGlossary(value: unknown) {
   const lines = Array.isArray(value) ? value.map(String) : String(value || "").split(/\r?\n/);
-  return lines.flatMap((line) => {
-    const separator = line.indexOf("=");
-    if (separator < 1) return [];
-    const source = line.slice(0, separator).trim();
-    const target = line.slice(separator + 1).trim();
-    return source && target ? [{ id: crypto.randomUUID(), source, target }] : [];
-  });
+  return parseGlossaryText(lines.join("\n")).map((entry) => ({ ...entry, id: crypto.randomUUID() }));
 }
 
 export function projectContextYaml(project: Project) {
@@ -66,7 +61,7 @@ export function projectContextYaml(project: Project) {
   context.polish_prompt_role = project.polishPromptRole ?? context.polish_prompt_role ?? "";
   context.polish_prompt_task = project.polishPromptTask ?? context.polish_prompt_task ?? "";
   if (project.styleNotes?.trim()) context.style_notes = project.styleNotes.trim();
-  if (project.glossary?.length) context.glossary = project.glossary.map((item) => `${item.source} = ${item.target}`).join("\n");
+  if (project.glossary) context.glossary = project.glossary.map(serializeGlossaryEntry).join("\n");
   return stringify(context, { lineWidth: 0 });
 }
 

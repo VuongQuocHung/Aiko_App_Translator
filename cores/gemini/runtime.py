@@ -5,6 +5,8 @@ import time
 
 from cores.gemini.api_client import generate_content
 from cores.gemini.key_manager import GeminiKeyManager
+from cores.retry import chapter_retry_managed
+from cores.config.runtime import stop_requested
 
 
 def load_api_keys(file_path):
@@ -79,7 +81,9 @@ class GeminiRuntime:
         pronoun_document=None,
         thinking_level=None,
     ):
-        while True:
+        for attempt in range(4):
+            if stop_requested():
+                raise InterruptedError("Đã dừng gọi Gemini")
             try:
                 return self._generate(
                     self.get_client(),
@@ -93,6 +97,19 @@ class GeminiRuntime:
                 )
             except Exception as error:
                 status = _http_status(error)
+                if chapter_retry_managed():
+                    # Let the outer loop count one failed chapter attempt. Rotate
+                    # before returning a 429 so the next attempt uses another key.
+                    if status == 429 or "RESOURCE_EXHAUSTED" in str(error):
+                        print(error)
+                        self.switch()
+                        try:
+                            error._novel_key_rotated = True
+                        except Exception:
+                            pass
+                    raise
+                if attempt == 3:
+                    raise
                 if status == 429 or "RESOURCE_EXHAUSTED" in str(error):
                     print(error)
                     self.switch()

@@ -11,7 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from cores.config import CONTEXT_JSON, RAW_DIR, TRANSLATED_DIR
 from cores.postprocess import runtime as postprocess_runtime
 from cores.config.runtime import bool_option, chapter_limit, stop_requested, web_mode
-from cores.translation.runner import run_single_translation
+from cores.translation.runner import MAX_CHAPTER_ATTEMPTS, run_single_translation
 from cores.translation.stage import provider, translate_chapter
 
 
@@ -37,6 +37,7 @@ def main():
             postprocess_runtime.setup_browser(provider_id)
     try:
         limit = chapter_limit() if web_mode() else None
+        skipped_chapters = set()
 
         def run_chapter():
             count = run_single_translation(
@@ -44,6 +45,8 @@ def main():
                 RAW_DIR,
                 TRANSLATED_DIR,
                 CONTEXT_JSON,
+                skipped_chapters=skipped_chapters,
+                max_attempts=MAX_CHAPTER_ATTEMPTS,
             )
             if count:
                 time.sleep(1)

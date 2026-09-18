@@ -25,6 +25,7 @@ class ProviderRequest:
     thinking: str | None = None
     attachments: tuple[dict, ...] = ()
     options: dict[str, Any] = field(default_factory=dict)
+    system_instruction: str = ""
 
 
 @dataclass(frozen=True)

@@ -23,7 +23,7 @@ def filtered_context_and_names(context_path, raw_files, start_index, chapter_cou
         os.path.dirname(os.path.abspath(context_path)), "pronouns.json"
     )
     return (
-        load_context_text(context_path, raw_text=raw_text),
+        load_context_text(context_path),
         find_glossary_targets(context_path, raw_text, pronouns_path),
         pronouns_path,
     )

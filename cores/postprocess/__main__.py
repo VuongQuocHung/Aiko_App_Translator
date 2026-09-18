@@ -13,6 +13,7 @@ from cores.chapters.files import load_md_chapter, save_translated_md, scan_md_di
 from cores.config import CONTEXT_JSON, RAW_DIR, TRANSLATED_DIR
 from cores.config.runtime import option, task_config
 from cores.postprocess import runtime
+from cores.postprocess.glossary import validate_and_correct
 from cores.pronouns import format_pronoun_context
 from cores.translation.context import filtered_context_and_names
 from providers.registry import pipeline_config
@@ -60,6 +61,8 @@ def main():
         title, content = runtime.fix_translation(
             chapter, chapter_index + 1, context_text, pronoun_context
         )
+        chapter["title_translation"], chapter["translation"] = title, content
+        title, content = validate_and_correct(runtime, chapter, context_text)
         output = save_translated_md(raw_path, TRANSLATED_DIR, title, content)
         print(f"Đã lưu bản hiệu đính: {output}")
     finally:

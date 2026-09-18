@@ -3,6 +3,7 @@
 import json
 
 from cores.storage.project import load_context, save_context
+from cores.context.glossary import GlossaryEntry, parse_boolean, parse_glossary, serialize_glossary
 from cores.translation.prompts import (
     DEFAULT_POLISH_ROLE,
     DEFAULT_POLISH_TASK,
@@ -32,13 +33,7 @@ class ContextService:
 
     @staticmethod
     def _payload(data, raw_json):
-        glossary = []
-        for line in str(data.get("glossary", "")).splitlines():
-            source, separator, target = line.partition("=")
-            if separator and source.strip() and target.strip():
-                glossary.append(
-                    {"source": source.strip(), "target": target.strip()}
-                )
+        glossary = [entry.payload() for entry in parse_glossary(str(data.get("glossary", "")))]
         return {
             "index": data.get("index", 0),
             "glossary": glossary,
@@ -79,17 +74,33 @@ class ContextService:
         items = payload.get("glossary_items")
         if not isinstance(items, list):
             raise ValueError("Dữ liệu glossary không hợp lệ")
+        data = self._current(path.parent)
+        previous = {entry.english: entry for entry in parse_glossary(str(data.get("glossary", "")))}
         glossary_lines = []
         for number, item in enumerate(items, 1):
             if not isinstance(item, dict):
                 raise ValueError(f"Glossary sai định dạng tại dòng {number}")
             source = str(item.get("source", "")).strip()
             target = str(item.get("target", "")).strip()
-            if not source or not target or "=" in source:
+            if source in previous:
+                item = {**previous[source].payload(), **item}
+            if not source or not target or "=" in source or any(c in source + target for c in "\r\n|"):
                 raise ValueError(f"Glossary sai định dạng tại dòng {number}")
-            glossary_lines.append(f"{source} = {target}")
-        data = self._current(path.parent)
-        data["glossary"] = "\n".join(glossary_lines)
+            extra = item.get("extra_metadata", {})
+            if not isinstance(extra, dict) or any(any(c in str(k) + str(v) for c in "\r\n|") or "=" in str(k) for k, v in extra.items()):
+                raise ValueError(f"Metadata sai định dạng tại dòng {number}")
+            kind = str(item.get("type", "Unknown")).strip() or "Unknown"
+            if any(c in kind for c in "\r\n|"):
+                raise ValueError(f"Type sai định dạng tại dòng {number}")
+            first_vi = parse_boolean(item.get("first_vi", False))
+            first_en = parse_boolean(item.get("first_en", False))
+            if first_vi and first_en:
+                first_en = False
+            glossary_lines.append(GlossaryEntry(source, target, kind, first_vi, first_en,
+                parse_boolean(item.get("brackets", False)),
+                {str(k): str(v) for k, v in extra.items() if k not in {"type", "first_vi", "first_en", "brackets"}},
+                parse_boolean(item.get("extended", False))).serialize())
+        data["glossary"] = serialize_glossary(parse_glossary("\n".join(glossary_lines)))
         self._write(path.parent, data)
         result = self.data(project_name)
         result["backup"] = path.with_name(path.name + ".bak").exists()
@@ -121,21 +132,7 @@ class ContextService:
 
     @staticmethod
     def _glossary_lines(value):
-        lines, invalid = [], []
-        for number, line in enumerate(str(value).splitlines(), 1):
-            if not line.strip():
-                continue
-            source, separator, target = line.partition("=")
-            if not separator or not source.strip() or not target.strip():
-                invalid.append(number)
-            else:
-                lines.append(f"{source.strip()} = {target.strip()}")
-        if invalid:
-            numbers = ", ".join(map(str, invalid[:10]))
-            raise ValueError(
-                f"Glossary sai định dạng Raw = Dịch tại dòng: {numbers}"
-            )
-        return lines
+        return [entry.serialize() for entry in parse_glossary(str(value))]
 
     @staticmethod
     def _save_prompt_fields(data, fields):
@@ -150,10 +147,10 @@ class ContextService:
         prompt_task = str(
             fields.get("prompt_task", data.get("prompt_task", DEFAULT_TASK))
         ).strip()
-        if not prompt_role or len(prompt_role) > 20000:
-            raise ValueError("Prompt vai trò phải có từ 1 đến 20.000 ký tự")
-        if not prompt_task or len(prompt_task) > 20000:
-            raise ValueError("Prompt nhiệm vụ phải có từ 1 đến 20.000 ký tự")
+        if not prompt_role or len(prompt_role) > 100000:
+            raise ValueError("Prompt vai trò phải có từ 1 đến 100.000 ký tự")
+        if not prompt_task or len(prompt_task) > 100000:
+            raise ValueError("Prompt nhiệm vụ phải có từ 1 đến 100.000 ký tự")
         polish_preset = str(
             fields.get(
                 "polish_prompt_preset",
@@ -174,10 +171,10 @@ class ContextService:
                 data.get("polish_prompt_task", DEFAULT_POLISH_TASK),
             )
         ).strip()
-        if not polish_role or len(polish_role) > 20000:
-            raise ValueError("Vai trò hiệu đính phải có từ 1 đến 20.000 ký tự")
-        if not polish_task or len(polish_task) > 20000:
-            raise ValueError("Nhiệm vụ hiệu đính phải có từ 1 đến 20.000 ký tự")
+        if not polish_role or len(polish_role) > 100000:
+            raise ValueError("Vai trò hiệu đính phải có từ 1 đến 100.000 ký tự")
+        if not polish_task or len(polish_task) > 100000:
+            raise ValueError("Nhiệm vụ hiệu đính phải có từ 1 đến 100.000 ký tự")
         data.update(
             {
                 "prompt_preset": prompt_preset,
@@ -201,36 +198,11 @@ class ContextService:
         return self.data(project_name)
 
     def _import_glossary(self, project_name, project, payload):
-        incoming = []
-        invalid = []
-        for number, line in enumerate(
-            str(payload.get("glossary_text", "")).splitlines(), 1
-        ):
-            if not line.strip():
-                continue
-            source, separator, target = line.partition("=")
-            if not separator or not source.strip() or not target.strip():
-                invalid.append(number)
-            else:
-                incoming.append((source.strip(), target.strip()))
-        if invalid:
-            numbers = ", ".join(map(str, invalid[:10]))
-            raise ValueError(
-                f"Glossary sai định dạng Raw = Dịch tại dòng: {numbers}"
-            )
+        incoming = parse_glossary(str(payload.get("glossary_text", "")))
         if not incoming:
             raise ValueError("Chưa có thuật ngữ hợp lệ để nạp")
         data = self._current(project)
-        merged = {}
-        for line in str(data.get("glossary", "")).splitlines():
-            source, separator, target = line.partition("=")
-            if separator and source.strip() and target.strip():
-                merged[source.strip()] = target.strip()
-        for source, target in incoming:
-            merged[source] = target
-        data["glossary"] = "\n".join(
-            f"{source} = {target}" for source, target in merged.items()
-        )
+        data["glossary"] = serialize_glossary(parse_glossary(str(data.get("glossary", "")) + "\n" + serialize_glossary(incoming)))
         self._write(project, data)
         result = self.data(project_name)
         result["imported"] = len(incoming)

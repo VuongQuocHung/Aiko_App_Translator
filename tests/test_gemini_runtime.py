@@ -6,6 +6,7 @@ from pathlib import Path
 
 from cores.gemini.runtime import GeminiRuntime, load_api_keys
 from cores.gemini.client import create_client
+from cores.retry import managed_chapter_attempt
 
 
 class GeminiRuntimeTests(unittest.TestCase):
@@ -59,7 +60,7 @@ class GeminiRuntimeTests(unittest.TestCase):
         self.assertEqual(calls[0][3]["max_output_tokens"], 123)
         self.assertEqual(calls[0][3]["thinking_level"], "high")
 
-    def test_generate_retries_5xx_forever_without_switching_key(self):
+    def test_generate_retries_5xx_within_four_attempts_without_switching_key(self):
         calls = []
         sleeps = []
 
@@ -100,7 +101,7 @@ class GeminiRuntimeTests(unittest.TestCase):
             3,
         )
 
-    def test_generate_rotates_key_and_retries_429_forever(self):
+    def test_generate_rotates_key_and_retries_429_within_limit(self):
         calls = []
         sleeps = []
 
@@ -153,6 +154,47 @@ class GeminiRuntimeTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(RuntimeError, "bad request"):
                 runtime.generate("prompt", "model")
+
+    def test_persistent_503_stops_after_four_attempts(self):
+        calls = []
+        class ServerError(RuntimeError):
+            status_code = 503
+        def generate(*args, **kwargs):
+            calls.append(1)
+            raise ServerError("unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = GeminiRuntime(["key"], Path(directory) / "state.json", lambda **kwargs: kwargs,
+                                    generate=generate, sleep=lambda _: None)
+            with self.assertRaises(ServerError):
+                runtime.generate("prompt", "model")
+        self.assertEqual(len(calls), 4)
+
+    def test_managed_chapter_attempt_disables_nested_5xx_retries(self):
+        calls = []
+        sleeps = []
+
+        class ServerError(RuntimeError):
+            status_code = 503
+
+        def generate(*_args, **_kwargs):
+            calls.append(1)
+            raise ServerError("temporarily unavailable")
+
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = GeminiRuntime(
+                ["key"],
+                Path(directory) / "state.json",
+                lambda **kwargs: kwargs,
+                generate=generate,
+                sleep=sleeps.append,
+            )
+            with managed_chapter_attempt(), self.assertRaisesRegex(
+                ServerError, "temporarily unavailable"
+            ):
+                runtime.generate("prompt", "model")
+
+        self.assertEqual(calls, [1])
+        self.assertEqual(sleeps, [])
 
 
 if __name__ == "__main__":

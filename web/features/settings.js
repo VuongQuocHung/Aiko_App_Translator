@@ -100,7 +100,10 @@ export function createSettingsFeature({api,escapeHtml,refreshUpdate,showView,toa
       const thinkingValue=settingItem(`pipeline_${stage}_thinking`);
       const model={...modelValue,default:sourceModel?.default||'',overridden:modelValue.value!==(sourceModel?.default||''),description:`Model riêng cho ${label.toLowerCase()}.`};
       const thinking={...thinkingValue,default:sourceThinking?.default||'',overridden:thinkingValue.value!==(sourceThinking?.default||''),description:provider.value==='openai-api'?'Reasoning riêng cho công đoạn này.':'Thinking riêng cho công đoạn này.'};
-      return `<details class="pipeline-stage-setting" data-pipeline-stage="${stage}" ${stage==='translate'?'open':''}><summary><strong>${label}</strong><span>${PROVIDER_LABELS[provider.value]||provider.value}</span></summary><div class="pipeline-stage-body"><label class="python-setting"><span>Engine</span><select data-python-setting="${provider.key}" data-stage-engine="${stage}">${engineOptions(stage,provider.value)}</select><small>Engine dùng riêng cho công đoạn này.</small></label>${renderSetting(model)}${renderSetting(thinking)}</div></details>`;
+      const reviewSettings=stage==='review'
+        ? renderSetting(settingItem('review_retranslate_enabled'))+renderSetting(settingItem('review_retranslate_threshold'))
+        : "";
+      return `<details class="pipeline-stage-setting" data-pipeline-stage="${stage}" ${stage==='translate'?'open':''}><summary><strong>${label}</strong><span>${PROVIDER_LABELS[provider.value]||provider.value}</span></summary><div class="pipeline-stage-body"><label class="python-setting"><span>Engine</span><select data-python-setting="${provider.key}" data-stage-engine="${stage}">${engineOptions(stage,provider.value)}</select><small>Engine dùng riêng cho công đoạn này.</small></label>${renderSetting(model)}${renderSetting(thinking)}${reviewSettings}${["translate","polish"].includes(stage)?renderSetting(settingItem(`${stage}_context_tokens`)):""}</div></details>`;
     };
     $('#pythonSettingsFields').innerHTML=activeGroup==='pipeline'
       ? `<div class="pipeline-stage-list">${pipelineStage('Dịch','translate')}${pipelineStage('Hiệu đính','polish')}${pipelineStage('Xuất xưng hô','pronouns')}${pipelineStage('Review','review')}${pipelineStage('Tạo Context','context')}${pipelineStage('Hồ sơ nhân vật','characters')}</div>`

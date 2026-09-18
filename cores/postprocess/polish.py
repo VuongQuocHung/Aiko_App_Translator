@@ -5,6 +5,14 @@ import time
 from pathlib import Path
 
 from cores.postprocess.snapshots import build_characters_snapshot
+from cores.retry import chapter_retry_managed, managed_chapter_attempt
+from cores.translation.prompts import build_polish_prompt
+from cores.stages.outputs import parse_title_content
+from cores.config.runtime import stop_requested
+from cores.context.glossary import glossary_from_context, parse_glossary
+from cores.context.validation import introduced_terms, CHAPTER_HEADING
+from cores.stages.budget import ContextBudgetError
+from cores.postprocess.glossary import validate_and_correct
 
 
 def polish_translation(
@@ -19,6 +27,25 @@ def polish_translation(
     thinking_level=None,
 ):
     """Polish one translated chapter through the configured polish provider."""
+    segments = chapter.get("_translation_segments", [])
+    if segments:
+        # Original and draft remain aligned; proofreading gets its OWN mention state.
+        entries = parse_glossary(glossary_from_context(context_text))
+        seen = set(chapter.get("_glossary_introduced", ()))
+        polished = []
+        for segment in segments:
+            piece = {**segment, "_glossary_introduced": sorted(seen)}
+            piece.pop("_translation_segments", None)
+            result = polish_translation(runtime, piece, chapter_number, context_text,
+                                        pronoun_context, characters_md_path, pronouns_file,
+                                        model, thinking_level)
+            piece["title_translation"], piece["translation"] = result
+            result = validate_and_correct(runtime, piece, context_text)
+            polished.append(result)
+            if CHAPTER_HEADING.search(result[1]):
+                seen.clear()
+            seen.update(introduced_terms(result[1], entries))
+        return polished[0][0], "\n\n".join(result[1] for result in polished)
     chapter_id = chapter.get("id", f"chapter_{chapter_number}")
     raw_title = chapter.get("title", "")
     raw_content = chapter.get("content", "")
@@ -56,43 +83,18 @@ def polish_translation(
                 }
             )
         role, task = runtime.project_polish_prompt()
-        prompt = runtime.wrap_r19_prompt(f"""# Vai trò hiệu đính
-{role}
-
-# Nhiệm vụ hiệu đính
-{task}
-
-Giữ nguyên đầy đủ nội dung, Markdown ảnh và dấu hội thoại. Không giải thích thay đổi.
-{runtime._r19_placeholder_instruction()}
-
-## Thuật ngữ và quy tắc
-{context_text}
-
-## Bộ nhớ xưng hô
-{pronoun_context}
-
-## Nguyên tác
-Tiêu đề: {raw_title}
-{raw_content}
-
-## Bản dịch cần hiệu đính
-Tiêu đề: {title_cur}
-{content_cur}
-
-Chỉ trả về:
-###TITLE###
-<tiêu đề hoàn chỉnh>
-###CONTENT###
-<nội dung hoàn chỉnh>
-###END###""")
+        prompt = build_polish_prompt(chapter, context_text, pronoun_context, role=role, task=task)
         if tmp_characters:
             prompt = runtime.with_character_document_instruction(prompt)
 
-        while True:
+        for attempt in range(3):
+            if stop_requested():
+                raise InterruptedError("Đã dừng hiệu đính")
             try:
-                text, provider, effective_model = runtime.generate(
-                    "polish", prompt, attachments
-                )
+                with managed_chapter_attempt():
+                    text, provider, effective_model = runtime.generate(
+                        "polish", prompt, attachments
+                    )
                 if "###TITLE###" not in text or "###CONTENT###" not in text:
                     print("[POLISH] Output sai format -- giữ nguyên bản dịch cũ.")
                     runtime.log_api_call(
@@ -104,13 +106,10 @@ Chỉ trả về:
                         ok=False,
                         attachments=attachments,
                     )
+                    if chapter_retry_managed():
+                        raise ValueError("Output hiệu đính sai định dạng")
                     return title_cur, content_cur
-                title_marker = text.find("###TITLE###") + len("###TITLE###")
-                content_marker = text.find("###CONTENT###")
-                title_out = text[title_marker:content_marker].strip()
-                content_out = text[content_marker + len("###CONTENT###") :].strip()
-                if content_out.endswith("###END###"):
-                    content_out = content_out[: -len("###END###")].rstrip()
+                title_out, content_out = parse_title_content(text, "Hiệu đính")
                 runtime.log_api_call(
                     chapter_id,
                     "polish",
@@ -125,9 +124,19 @@ Chỉ trả về:
                     f"({len(content_out)} ký tự)"
                 )
                 return title_out, content_out
+            except InterruptedError:
+                raise
+            except ContextBudgetError:
+                # Not a network failure. The caller retains the original draft.
+                raise
             except Exception as error:
                 message = str(error)
                 print(f"[POLISH] Lỗi: {message}")
+                if chapter_retry_managed():
+                    raise
+                if attempt == 2:
+                    print("[POLISH] Đã hết số lần thử; giữ bản dịch nháp.")
+                    return title_cur, content_cur
                 if provider == "gemini-api" and (
                     "429" in message
                     or "RESOURCE_EXHAUSTED" in message

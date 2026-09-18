@@ -11,6 +11,8 @@ def parse_title_content(text, stage):
         raise ValueError(f"{stage} trả sai định dạng TITLE/CONTENT.")
     title_start = text.find("###TITLE###") + len("###TITLE###")
     content_start = text.find("###CONTENT###")
+    if content_start < title_start or "###END###" not in text[content_start:]:
+        raise ValueError(f"{stage} trả kết quả chưa hoàn chỉnh hoặc sai thứ tự marker.")
     title = text[title_start:content_start].strip()
     raw_content = text[content_start + len("###CONTENT###") :]
     end = raw_content.find("###END###")

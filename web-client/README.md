@@ -9,7 +9,9 @@ Bản Web Client chạy hoàn toàn trong trình duyệt. Dữ liệu dự án �
 - Lưu ảnh EPUB dạng Blob trong IndexedDB và hiển thị ngay trong Preview của chương.
 - Biên tập song song bản gốc và bản dịch bằng CodeMirror.
 - Dịch theo pipeline: tiêu đề và nội dung, hiệu đính, sửa chữ ngoại ngữ còn sót, cập nhật xưng hô và review.
-- Dùng ba chương dịch gần nhất làm ngữ cảnh và chỉ gửi glossary liên quan đến chương hiện tại hoặc chương kế tiếp.
+- Dùng ba chương dịch gần nhất làm ngữ cảnh và gửi toàn bộ glossary, gồm metadata. Chỉ lọc khi ước lượng vượt ngân sách context.
+- Hỗ trợ type, first_vi, first_en, brackets và target_only; kiểm tra và yêu cầu AI sửa glossary sau hiệu đính. Trạng thái lần xuất hiện đầu được giữ khi chia chương theo đoạn.
+- Chi tiết định dạng, pipeline và giới hạn: [Báo cáo nâng cấp Glossary](../docs/GLOSSARY_UPGRADE.md).
 - Kiểm tra marker đầu ra, retry tối đa ba lượt và tự luân phiên nhiều Gemini API key.
 - Chỉnh riêng model, giới hạn token và system prompt cho từng tác vụ AI.
 - Mặc định dùng cùng model với app local; giới hạn token để trống cho Gemini tự chọn.

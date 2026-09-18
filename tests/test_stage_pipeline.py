@@ -24,6 +24,36 @@ CHAPTER = {
 
 
 class StagePipelineTests(unittest.TestCase):
+    def test_saved_pipeline_polish_model_reaches_transport_without_ui_overrides(self):
+        values = {"pipeline_polish_provider": "openai-api",
+                  "pipeline_polish_model": "gemini-pro-agent",
+                  "pipeline_polish_thinking": "high",
+                  "gpt_api_polish_model": "wrong-default"}
+        transport = Mock(return_value="result")
+        response, provider, model = stage_runtime.generate_stage(
+            "polish", "prompt", get_option=lambda key, default=None: values.get(key, default),
+            overrides={"openai-api": transport},
+        )
+        self.assertEqual((provider, model), ("openai-api", "gemini-pro-agent"))
+        self.assertEqual(transport.call_args.kwargs["model"], "gemini-pro-agent")
+        self.assertEqual(transport.call_args.kwargs["reasoning_effort"], "high")
+
+    def test_task_overrides_win_over_saved_pipeline_settings(self):
+        values = {"pipeline_polish_provider": "gemini-api", "pipeline_polish_model": "saved",
+                  "polish_provider": "openai-api", "polish_stage_model": "task-model",
+                  "polish_stage_thinking": "medium"}
+        get_option = lambda key, default=None: values.get(key, default)
+        self.assertEqual(stage_runtime.stage_provider("polish", get_option=get_option), "openai-api")
+        self.assertEqual(stage_runtime.stage_model_and_thinking("polish", "openai-api", get_option=get_option), ("task-model", "medium"))
+
+    def test_provider_override_does_not_inherit_other_providers_model(self):
+        values = {"pipeline_polish_provider": "gemini-api", "pipeline_polish_model": "gemini-saved",
+                  "pipeline_polish_thinking": "gemini-thinking", "polish_provider": "openai-api",
+                  "gpt_api_polish_model": "openai-selected", "gpt_api_polish_effort": "low"}
+        self.assertEqual(stage_runtime.stage_model_and_thinking(
+            "polish", "openai-api", get_option=lambda key, default=None: values.get(key, default)
+        ), ("openai-selected", "low"))
+
     def test_generation_logs_effective_stage_provider_and_model(self):
         values = {
             "translate_stage_model": "gemini-test",

@@ -27,6 +27,8 @@ class SettingsSchemaTests(unittest.TestCase):
         self.assertEqual("gemini-flash-lite-latest", defaults["pipeline_review_model"])
         self.assertEqual("off", defaults["gemini_api_streaming"])
         self.assertEqual("off", defaults["lan_enabled"])
+        self.assertEqual(9, defaults["review_retranslate_threshold"])
+        self.assertEqual((1, 10), settings_schema.SETTING_RANGES["review_retranslate_threshold"])
         self.assertEqual("gemini-flash-lite-latest", defaults["ai_studio_pronoun_model"])
         self.assertEqual("gemini-flash-lite-latest", defaults["ai_studio_review_model"])
         self.assertEqual(

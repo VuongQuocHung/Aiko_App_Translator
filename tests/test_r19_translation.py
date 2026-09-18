@@ -100,7 +100,7 @@ class R19TranslationTests(unittest.TestCase):
             postprocess_polish_module, "build_characters_snapshot", return_value=None
         ), patch.dict(
             translation_stage.TRANSPORT_OVERRIDES,
-            {"openai-api": lambda prompt, **_kwargs: captured.append(prompt)
+            {"openai-api": lambda prompt, **_kwargs: captured.append(_kwargs.get("system_instruction", "") + "\n\n" + prompt)
             or "###TITLE###\nT\n###CONTENT###\nC\n###END###"},
             clear=True,
         ), patch.object(postprocess_runtime_module.runtime, "log_api_call"):

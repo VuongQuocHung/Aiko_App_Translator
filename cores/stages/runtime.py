@@ -15,6 +15,7 @@ from cores.gemini import call_gemini
 from providers.openai_client import call_gpt_api
 from cores.config.runtime import option
 from cores.stages.transport import generate_for_stage
+from cores.stages.budget import fit_request, stage_limits
 
 
 MODEL_DEFAULTS = {
@@ -60,12 +61,19 @@ PROVIDER_LABELS = {
 
 
 def stage_provider(stage, *, get_option=option, default="gemini-api"):
-    return str(get_option(f"{stage}_provider", default)).strip().lower()
+    saved = get_option(f"pipeline_{stage}_provider", default)
+    return str(get_option(f"{stage}_provider", saved)).strip().lower()
 
 
 def stage_model_and_thinking(stage, provider, *, get_option=option):
-    model = str(get_option(f"{stage}_stage_model", "")).strip()
-    thinking = str(get_option(f"{stage}_stage_thinking", "")).strip()
+    # UI tasks pass stage overrides, but CLI/manual entrypoints may only have
+    # persisted pipeline settings. Never reuse a saved model for another provider.
+    saved_provider = str(get_option(f"pipeline_{stage}_provider", "")).strip().lower()
+    use_saved = saved_provider == provider
+    saved_model = get_option(f"pipeline_{stage}_model", "") if use_saved else ""
+    saved_thinking = get_option(f"pipeline_{stage}_thinking", "") if use_saved else ""
+    model = str(get_option(f"{stage}_stage_model", saved_model) or "").strip()
+    thinking = str(get_option(f"{stage}_stage_thinking", saved_thinking) or "").strip()
     if provider == "gemini-api":
         key, default = MODEL_DEFAULTS[provider][stage]
         return (
@@ -125,6 +133,9 @@ def generate_stage(
     model, thinking = stage_model_and_thinking(
         stage, provider, get_option=get_option
     )
+    if stage in {"translate", "polish"}:
+        context_tokens, output_tokens = stage_limits(stage, provider, get_option)
+        prompt = fit_request(prompt, attachments, context_tokens=context_tokens, output_tokens=output_tokens)
     print(
         f"[AI] {STAGE_LABELS.get(stage, stage)} · "
         f"{PROVIDER_LABELS.get(provider, provider)} · {model}",

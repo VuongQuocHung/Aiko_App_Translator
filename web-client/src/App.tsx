@@ -20,6 +20,8 @@ import {
   UploadSimple,
 } from "@phosphor-icons/react";
 import { db, deleteProject } from "./db/database";
+import { parseGlossary, serializeGlossaryEntry, validateGlossary, introducedTerms, correctGlossary } from "./services/glossary";
+import { ContextBudgetError, fitNovelRequest, splitSource } from "./services/requestBudget";
 import { MarkdownEditor } from "./components/MarkdownEditor";
 import type { MarkdownEditorHandle } from "./components/MarkdownEditor";
 import { MarkdownPreview, markdownToClipboardHtml, markdownToPlainText } from "./components/MarkdownPreview";
@@ -71,6 +73,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   rememberApiKey: false,
 };
 
+const MAX_CHAPTER_ATTEMPTS = 3;
+
 const navItems: Array<{ id: WorkspaceView; label: string; icon: typeof Translate }> = [
   { id: "translate", label: "Biên dịch", icon: Translate },
   { id: "characters", label: "Hồ sơ nhân vật", icon: AddressBook },
@@ -106,20 +110,19 @@ export function chapterDisplayTitle(chapter: Chapter) {
   return stored || chapter.title;
 }
 
-export function translationContextYaml(project: Project, rawText: string) {
+export function translationContextYaml(project: Project, _rawText: string) {
   let context: Record<string, unknown> = {};
   try { context = parse(projectContextYaml(project)) as Record<string, unknown> || {}; } catch { /* projectContextYaml always emits valid YAML */ }
   for (const key of ["index", "prompt_preset", "prompt_role", "prompt_task", "polish_prompt_preset", "polish_prompt_role", "polish_prompt_task"]) delete context[key];
-  const source = rawText.toLocaleLowerCase();
-  const glossary = (project.glossary || []).filter((entry) => entry.source.trim() && source.includes(entry.source.trim().toLocaleLowerCase()));
-  if (glossary.length) context.glossary = glossary.map((entry) => `${entry.source} = ${entry.target}`).join("\n");
+  const glossary = (project.glossary || []).filter((entry) => entry.source.trim() && entry.target.trim());
+  if (glossary.length) context.glossary = glossary.map(serializeGlossaryEntry).join("\n");
   else delete context.glossary;
   return stringify(context, { lineWidth: 0 });
 }
 
 function characterPrompt(batch: Chapter[], glossary: Project["glossary"]) {
   const raw = batch.map((item) => `### ${item.title}\n${item.source}`).join("\n\n");
-  const glossaryText = glossary?.map((item) => `${item.source} = ${item.target}`).join("\n") || "(Chua co glossary)";
+  const glossaryText = glossary?.map(serializeGlossaryEntry).join("\n") || "(Chua co glossary)";
   return `# Vai tro
 Ban la tro ly bien tap chuyen phan tich nhan vat trong tieu thuyet fantasy Han Quoc.
 
@@ -217,7 +220,7 @@ export function mergeCharacterMarkdown(existing: string, incoming: string) {
 
 function glossaryPrompt(batch: Chapter[], existing: Project["glossary"]) {
   const raw = batch.map((item) => `${item.title}\n${item.source}`).join("\n\n");
-  const old = existing?.map((item) => `${item.source} = ${item.target}`).join("\n") || "";
+  const old = existing?.map(serializeGlossaryEntry).join("\n") || "";
   return `Bạn là công cụ xây dựng glossary cho bản dịch tiểu thuyết.
 
 Từ nội dung raw dưới đây, trích xuất thuật ngữ, danh hiệu, xưng hô, tên riêng
@@ -242,13 +245,7 @@ export function parseGlossaryResponse(response: string) {
   const start = response.indexOf("###START###");
   const end = response.indexOf("###END###", start + 11);
   if (start < 0 || end < 0) throw new Error("Gemini trả glossary thiếu marker START/END.");
-  return response.slice(start + 11, end).split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    const separator = line.indexOf("=");
-    if (separator <= 0) return null;
-    const source = line.slice(0, separator).trim();
-    const target = line.slice(separator + 1).trim();
-    return source && target ? { source, target } : null;
-  }).filter((item): item is { source: string; target: string } => Boolean(item));
+  return parseGlossary(response.slice(start + 11, end));
 }
 
 const CHARACTER_HEADER = "# Hồ Sơ Nhân Vật\n\n> File được tạo tự động. Bạn có thể chỉnh sửa trực tiếp; lần phân tích sau sẽ đọc và bổ sung dữ liệu hiện có.\n\n---\n\n";
@@ -448,10 +445,10 @@ export function App() {
         let renderedLines = 0;
         result = await streamWithApiKeys(apiKeys, 0, {
           model: taskSettings.model,
-          maxOutputTokens: taskSettings.maxOutputTokens,
+          maxOutputTokens: taskSettings.maxOutputTokens, contextTokens: taskSettings.contextTokens,
           ...prompt,
           document: project.characters.trim() ? { name: "characters.md", mimeType: "text/markdown", content: project.characters } : undefined,
-          systemInstruction: taskSettings.systemInstruction.trim() || prompt.systemInstruction,
+          systemInstruction: [taskSettings.systemInstruction.trim(), prompt.systemInstruction].filter(Boolean).join("\n\n"),
           signal: controller.signal,
           onText: (delta) => {
             streamed += delta;
@@ -471,13 +468,19 @@ export function App() {
         showStreamedChapter(chapter.id, { translation: result }, "polish", Math.max(0, result.split("\n").length - 1));
       } else result = await generateWithApiKeys(apiKeys, 0, {
           model: taskSettings.model,
-          maxOutputTokens: taskSettings.maxOutputTokens,
+          maxOutputTokens: taskSettings.maxOutputTokens, contextTokens: taskSettings.contextTokens,
           ...prompt,
           document: project.characters.trim() ? { name: "characters.md", mimeType: "text/markdown", content: project.characters } : undefined,
-          systemInstruction: taskSettings.systemInstruction.trim() || prompt.systemInstruction,
+          systemInstruction: [taskSettings.systemInstruction.trim(), prompt.systemInstruction].filter(Boolean).join("\n\n"),
           signal: controller.signal,
         });
-      if (kind === "polish") await updateChapter({ translation: result });
+      if (kind === "polish") {
+        const checked = await correctGlossary(chapter.source, result, project.glossary || [],
+          (request) => generateWithApiKeys(apiKeys, 1, { ...request, model: taskSettings.model,
+            maxOutputTokens: taskSettings.maxOutputTokens, contextTokens: taskSettings.contextTokens, signal: controller.signal }, 1), [], controller.signal);
+        await updateChapter({ translation: checked.text, glossaryValidation: { passed: !checked.errors.length, errors: checked.errors } });
+        if (checked.errors.length) setError(`Còn lỗi glossary; đã giữ bản hiệu đính. ${checked.errors.join("\n")}`);
+      }
       if (kind === "pronouns") await updateProject({ pronouns: result });
       if (kind === "review") {
         const parsed = parseReviewResponse(result);
@@ -503,30 +506,30 @@ export function App() {
     }
   }
 
-  async function generateWithApiKeys(keys: string[], startIndex: number, options: Omit<Parameters<typeof generateContent>[0], "apiKey">) {
+  async function generateWithApiKeys(keys: string[], startIndex: number, options: Omit<Parameters<typeof generateContent>[0], "apiKey">, maxAttempts = 3) {
     let keyIndex = startIndex % keys.length;
-    let retries = 0;
-    while (true) {
+    const attemptLimit = Math.max(1, Math.trunc(maxAttempts));
+    for (let attempt = 1; attempt <= attemptLimit; attempt += 1) {
       try {
         return await generateContent({ ...options, apiKey: keys[keyIndex] });
       } catch (reason) {
         if (reason instanceof DOMException && reason.name === "AbortError") throw reason;
         if (!(reason instanceof GeminiRequestError)) throw reason;
         const action = geminiRetryAction(reason.status);
-        if (action === "fail") throw reason;
-        retries += 1;
+        if (action === "fail" || attempt >= attemptLimit) throw reason;
         if (action === "rotate-key") keyIndex = (keyIndex + 1) % keys.length;
-        const wait = Math.min((action === "rotate-key" ? 10 : 5) * retries, 60);
+        const wait = Math.min((action === "rotate-key" ? 10 : 5) * attempt, 60);
         setNotice(action === "rotate-key" ? `Gemini lỗi ${reason.status}; đổi API key và thử lại sau ${wait}s…` : `Gemini lỗi ${reason.status}; thử lại sau ${wait}s…`);
         await waitForGeminiRetry(wait * 1000, options.signal);
       }
     }
+    throw new Error(`Gemini không hoàn tất yêu cầu sau ${attemptLimit} lần thử.`);
   }
 
-  async function streamWithApiKeys(keys: string[], startIndex: number, options: Omit<Parameters<typeof streamInteraction>[0], "apiKey">, onAttempt: () => void) {
+  async function streamWithApiKeys(keys: string[], startIndex: number, options: Omit<Parameters<typeof streamInteraction>[0], "apiKey">, onAttempt: () => void, maxAttempts = 3) {
     let keyIndex = startIndex % keys.length;
-    let retries = 0;
-    while (true) {
+    const attemptLimit = Math.max(1, Math.trunc(maxAttempts));
+    for (let attempt = 1; attempt <= attemptLimit; attempt += 1) {
       try {
         onAttempt();
         return await streamInteraction({ ...options, apiKey: keys[keyIndex] });
@@ -534,14 +537,14 @@ export function App() {
         if (reason instanceof DOMException && reason.name === "AbortError") throw reason;
         if (!(reason instanceof GeminiRequestError)) throw reason;
         const action = geminiRetryAction(reason.status);
-        if (action === "fail") throw reason;
-        retries += 1;
+        if (action === "fail" || attempt >= attemptLimit) throw reason;
         if (action === "rotate-key") keyIndex = (keyIndex + 1) % keys.length;
-        const wait = Math.min((action === "rotate-key" ? 10 : 5) * retries, 60);
+        const wait = Math.min((action === "rotate-key" ? 10 : 5) * attempt, 60);
         setNotice(action === "rotate-key" ? `Gemini lỗi ${reason.status}; đổi API key và thử lại sau ${wait}s…` : `Gemini lỗi ${reason.status}; thử lại sau ${wait}s…`);
         await waitForGeminiRetry(wait * 1000, options.signal);
       }
     }
+    throw new Error(`Gemini streaming không hoàn tất sau ${attemptLimit} lần thử.`);
   }
 
   function waitForGeminiRetry(milliseconds: number, signal?: AbortSignal) {
@@ -586,7 +589,7 @@ export function App() {
       task: project.promptTask,
     });
     const customSystem = (settings.tasks?.translate || DEFAULT_TASKS.translate).systemInstruction.trim();
-    setManualTranslation({ prompt: [customSystem, request.prompt].filter(Boolean).join("\n\n"), result: "" });
+    setManualTranslation({ prompt: [customSystem, request.systemInstruction, request.prompt].filter(Boolean).join("\n\n"), result: "" });
   }
 
   async function applyManualTranslation() {
@@ -601,7 +604,7 @@ export function App() {
     }
   }
 
-  async function translateChapterPipeline(item: Chapter, itemIndex: number, chapterState: Chapter[], keys: string[], keyOffset: number, signal: AbortSignal, pronounMemory: string) {
+  async function translateChapterPipeline(item: Chapter, itemIndex: number, chapterState: Chapter[], keys: string[], keyOffset: number, signal: AbortSignal, pronounMemory: string, introduced: string[] = [], chunkDepth = 0): Promise<{ chapter: Chapter; pronouns: string }> {
     if (!project) throw new Error("Không tìm thấy dự án.");
     const translateSettings = settings.tasks?.translate || DEFAULT_TASKS.translate;
     const context = contextForChapter(item, itemIndex);
@@ -616,61 +619,82 @@ export function App() {
       role: project.promptRole,
       task: project.promptTask,
     });
-    let translated: { title: string; content: string } | undefined;
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        let streamed = "";
-        let streamFrame: number | null = null;
-        let pending: ReturnType<typeof parseTranslationStream> = null;
-        const renderPending = () => {
-          streamFrame = null;
-          if (!pending) return;
-          const partial = pending;
-          pending = null;
-          const line = partial.content ? partial.content.split("\n").length - 1 : null;
-          showStreamedChapter(item.id, { translatedTitle: partial.title || item.title, translation: partial.content }, "translate", line);
-        };
-        const response = await streamWithApiKeys(keys, keyOffset + attempt, {
-          model: translateSettings.model,
-          maxOutputTokens: translateSettings.maxOutputTokens,
-          ...prompt,
-          document: project.characters.trim() ? { name: "characters.md", mimeType: "text/markdown", content: project.characters } : undefined,
-          systemInstruction: translateSettings.systemInstruction.trim() || prompt.systemInstruction,
-          signal,
-          onText: (delta) => {
-            streamed += delta;
-            const partial = parseTranslationStream(streamed);
-            if (!partial) return;
-            pending = partial;
-            if (streamFrame === null) streamFrame = window.requestAnimationFrame(renderPending);
-          },
-        }, () => {
-          if (streamFrame !== null) window.cancelAnimationFrame(streamFrame);
-          streamed = "";
-          streamFrame = null;
-          pending = null;
-          showStreamedChapter(item.id, { translatedTitle: item.title, translation: "" }, "translate", null);
-        });
-        if (streamFrame !== null) window.cancelAnimationFrame(streamFrame);
-        translated = parseTranslationResponse(response);
-        showStreamedChapter(item.id, { translatedTitle: translated.title, translation: translated.content }, "translate", Math.max(0, translated.content.split("\n").length - 1));
-        break;
-      } catch (reason) {
-        lastError = reason;
-        if (reason instanceof DOMException && reason.name === "AbortError") throw reason;
+    const stateInstruction = introduced.length ? `\nTERMS ALREADY INTRODUCED IN THIS CHAPTER:\n${introduced.join("\n")}` : "";
+    prompt.systemInstruction += stateInstruction;
+    const document = project.characters.trim() ? { name: "characters.md", mimeType: "text/markdown", content: project.characters } : undefined;
+    try {
+      fitNovelRequest({ ...prompt, document, maxOutputTokens: translateSettings.maxOutputTokens, contextTokens: translateSettings.contextTokens,
+        systemInstruction: [translateSettings.systemInstruction, prompt.systemInstruction].filter(Boolean).join("\n\n") });
+      if (taskEnabled("polish")) {
+        const polishSettings = settings.tasks?.polish || DEFAULT_TASKS.polish;
+        const preview = polishPrompt(item.source, item.source.repeat(2), context, project.polishPromptRole, project.polishPromptTask);
+        fitNovelRequest({ ...preview, document, maxOutputTokens: polishSettings.maxOutputTokens, contextTokens: polishSettings.contextTokens,
+          systemInstruction: [polishSettings.systemInstruction, preview.systemInstruction + stateInstruction].filter(Boolean).join("\n\n") });
       }
+    } catch (reason) {
+      if (!(reason instanceof ContextBudgetError) || chunkDepth >= 12) throw reason;
+      const [left, right] = splitSource(item.source);
+      setNotice(`${item.title}: chia theo đoạn văn, giữ trạng thái thuật ngữ trong chương.`);
+      const first = await translateChapterPipeline({ ...item, source: left }, itemIndex, chapterState, keys, keyOffset, signal, pronounMemory, introduced, chunkDepth + 1);
+      const reset = /^(?:#{1,6}\s*)?(?:chapter|chương|section)\s*\d+/imu.test(first.chapter.translation);
+      const nextState = [...new Set([...(reset ? [] : introduced), ...introducedTerms(first.chapter.translation, project.glossary || [])])];
+      const second = await translateChapterPipeline({ ...item, source: right }, itemIndex, chapterState, keys, keyOffset + 1, signal, first.pronouns, nextState, chunkDepth + 1);
+      const translation = first.chapter.translation + "\n\n" + second.chapter.translation;
+      showStreamedChapter(item.id, { translatedTitle: first.chapter.translatedTitle, translation }, "polish", null);
+      const errors = validateGlossary(translation, project.glossary || [], item.source, introduced);
+      return { chapter: { ...second.chapter, source: item.source, translatedTitle: first.chapter.translatedTitle, translation, glossaryValidation: { passed: !errors.length, errors } }, pronouns: second.pronouns };
     }
-    if (!translated) throw lastError || new Error("Không thể dịch chương sau 3 lần thử.");
+    let streamed = "";
+    let streamFrame: number | null = null;
+    let pending: ReturnType<typeof parseTranslationStream> = null;
+    const renderPending = () => {
+      streamFrame = null;
+      if (!pending) return;
+      const partial = pending;
+      pending = null;
+      const line = partial.content ? partial.content.split("\n").length - 1 : null;
+      showStreamedChapter(item.id, { translatedTitle: partial.title || item.title, translation: partial.content }, "translate", line);
+    };
+    let response = "";
+    try {
+      response = await streamWithApiKeys(keys, keyOffset, {
+        model: translateSettings.model,
+        maxOutputTokens: translateSettings.maxOutputTokens, contextTokens: translateSettings.contextTokens,
+        ...prompt,
+        document: project.characters.trim() ? { name: "characters.md", mimeType: "text/markdown", content: project.characters } : undefined,
+        systemInstruction: [translateSettings.systemInstruction.trim(), prompt.systemInstruction].filter(Boolean).join("\n\n"),
+        signal,
+        onText: (delta) => {
+          streamed += delta;
+          const partial = parseTranslationStream(streamed);
+          if (!partial) return;
+          pending = partial;
+          if (streamFrame === null) streamFrame = window.requestAnimationFrame(renderPending);
+        },
+      }, () => {
+        if (streamFrame !== null) window.cancelAnimationFrame(streamFrame);
+        streamed = "";
+        streamFrame = null;
+        pending = null;
+        showStreamedChapter(item.id, { translatedTitle: item.title, translation: "" }, "translate", null);
+      }, 1);
+    } finally {
+      if (streamFrame !== null) window.cancelAnimationFrame(streamFrame);
+      streamFrame = null;
+      pending = null;
+    }
+    const translated = parseTranslationResponse(response);
+    showStreamedChapter(item.id, { translatedTitle: translated.title, translation: translated.content }, "translate", Math.max(0, translated.content.split("\n").length - 1));
 
     let content = translated.content;
     if (taskEnabled("polish")) {
       const polishSettings = settings.tasks?.polish || DEFAULT_TASKS.polish;
       const polish = polishPrompt(item.source, content, context, project.polishPromptRole, project.polishPromptTask);
+      polish.systemInstruction += stateInstruction;
       const original = content;
       let streamed = "";
       let renderedLines = 0;
-      content = await streamWithApiKeys(keys, keyOffset + 1, { model: polishSettings.model, maxOutputTokens: polishSettings.maxOutputTokens, ...polish, systemInstruction: polishSettings.systemInstruction.trim() || polish.systemInstruction, document: project.characters.trim() ? { name: "characters.md", mimeType: "text/markdown", content: project.characters } : undefined, signal, onText: (delta) => {
+      content = await streamWithApiKeys(keys, keyOffset + 1, { model: polishSettings.model, maxOutputTokens: polishSettings.maxOutputTokens, contextTokens: polishSettings.contextTokens, ...polish, systemInstruction: [polishSettings.systemInstruction.trim(), polish.systemInstruction].filter(Boolean).join("\n\n"), document: project.characters.trim() ? { name: "characters.md", mimeType: "text/markdown", content: project.characters } : undefined, signal, onText: (delta) => {
         streamed += delta;
         const incoming = streamed.split("\n");
         const ready = Math.max(0, incoming.length - 1);
@@ -683,19 +707,29 @@ export function App() {
         streamed = "";
         renderedLines = 0;
         showStreamedChapter(item.id, { translation: original }, "polish", null);
-      });
+      }, 1);
       showStreamedChapter(item.id, { translation: content }, "polish", Math.max(0, content.split("\n").length - 1));
       for (let attempt = 0; attempt < 3 && containsCjkOrHangul(content); attempt += 1) {
-        content = await generateWithApiKeys(keys, keyOffset + attempt + 2, { model: polishSettings.model, maxOutputTokens: polishSettings.maxOutputTokens, systemInstruction: "Bạn sửa bản dịch còn sót chữ Hán, Nhật hoặc Hàn. Dịch hết phần còn sót sang tiếng Việt, giữ nguyên đầy đủ nội dung, Markdown ảnh và dấu hội thoại. Chỉ trả về bản dịch hoàn chỉnh.", prompt: `# Nguyên tác\n${item.source}\n\n# Bản dịch còn sót chữ ngoại ngữ\n${content}`, signal });
+        content = await generateWithApiKeys(keys, keyOffset + attempt + 2, { model: polishSettings.model, maxOutputTokens: polishSettings.maxOutputTokens, contextTokens: polishSettings.contextTokens, systemInstruction: "Bạn sửa bản dịch còn sót chữ Hán, Nhật hoặc Hàn. Dịch hết phần còn sót sang tiếng Việt, giữ nguyên đầy đủ nội dung, Markdown ảnh và dấu hội thoại. Chỉ trả về bản dịch hoàn chỉnh.", prompt: `# Nguyên tác\n${item.source}\n\n# Bản dịch còn sót chữ ngoại ngữ\n${content}`, signal }, 1);
       }
       if (containsCjkOrHangul(content)) throw new Error(`${item.title} vẫn còn ký tự Hán, Nhật hoặc Hàn sau 3 lần sửa.`);
     }
+
+    const glossary = project.glossary || [];
+    const correctionSettings = settings.tasks?.polish || DEFAULT_TASKS.polish;
+    const checked = await correctGlossary(item.source, content, glossary, taskEnabled("polish")
+      ? (request) => generateWithApiKeys(keys, keyOffset + 2, { ...request, model: correctionSettings.model,
+          maxOutputTokens: correctionSettings.maxOutputTokens, contextTokens: correctionSettings.contextTokens, signal }, 1)
+      : undefined, introduced, signal);
+    content = checked.text;
+    const glossaryErrors = checked.errors;
+    if (glossaryErrors.length) setError(`${item.title}: còn lỗi glossary, đã giữ bản hiệu đính. ${glossaryErrors.join("\n")}`);
 
     let nextPronouns = pronounMemory;
     if (taskEnabled("pronouns")) {
       const pronounSettings = settings.tasks?.pronouns || DEFAULT_TASKS.pronouns;
       const pronoun = pronounsPrompt(item.source, content, pronounMemory);
-      nextPronouns = await generateWithApiKeys(keys, keyOffset + 2, { model: pronounSettings.model, maxOutputTokens: pronounSettings.maxOutputTokens, ...pronoun, systemInstruction: pronounSettings.systemInstruction.trim() || pronoun.systemInstruction, signal });
+      nextPronouns = await generateWithApiKeys(keys, keyOffset + 2, { model: pronounSettings.model, maxOutputTokens: pronounSettings.maxOutputTokens, ...pronoun, systemInstruction: pronounSettings.systemInstruction.trim() || pronoun.systemInstruction, signal }, 1);
     }
 
     let review = item.review || "";
@@ -704,13 +738,13 @@ export function App() {
     if (taskEnabled("review")) {
       const reviewSettings = settings.tasks?.review || DEFAULT_TASKS.review;
       const reviewRequest = reviewPrompt({ chapterId: item.localFileName?.replace(/\.md$/i, "") || item.id, chapterNumber: item.order, rawTitle: item.title, source: item.source, translatedTitle: translated.title, translation: content, context });
-      const response = await generateWithApiKeys(keys, keyOffset + 3, { model: reviewSettings.model, maxOutputTokens: reviewSettings.maxOutputTokens, ...reviewRequest, systemInstruction: reviewSettings.systemInstruction.trim() || reviewRequest.systemInstruction, signal });
+      const response = await generateWithApiKeys(keys, keyOffset + 3, { model: reviewSettings.model, maxOutputTokens: reviewSettings.maxOutputTokens, ...reviewRequest, systemInstruction: reviewSettings.systemInstruction.trim() || reviewRequest.systemInstruction, signal }, 1);
       const parsed = parseReviewResponse(response);
       review = reviewResultText(parsed);
       localReviewText = review;
       localReviewData = { chapter_number: item.order, score: parsed.overall_score, issue_count: parsed.issues.length, gender_ok: parsed.gender_ok, address_ok: parsed.address_ok, issues: parsed.issues, summary: parsed.summary };
     }
-    return { chapter: { ...item, translatedTitle: translated.title, translation: content, review, localReviewData, localReviewText, updatedAt: now() }, pronouns: nextPronouns };
+    return { chapter: { ...item, translatedTitle: translated.title, translation: content, review, localReviewData, localReviewText, glossaryValidation: { passed: !glossaryErrors.length, errors: glossaryErrors }, updatedAt: now() }, pronouns: nextPronouns };
   }
 
   async function persistPipelineResult(result: Awaited<ReturnType<typeof translateChapterPipeline>>) {
@@ -723,6 +757,47 @@ export function App() {
     setProjects((items) => items.map((item) => item.id === project.id ? { ...item, pronouns: result.pronouns, updatedAt: now() } : item));
   }
 
+  async function translateAndPersistChapter(
+    item: Chapter,
+    itemIndex: number,
+    chapterState: Chapter[],
+    keys: string[],
+    keyOffset: number,
+    signal: AbortSignal,
+    pronounMemory: string,
+    progressLabel: string,
+  ) {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= MAX_CHAPTER_ATTEMPTS; attempt += 1) {
+      try {
+        setNotice(`${progressLabel}: ${item.title} · lần ${attempt}/${MAX_CHAPTER_ATTEMPTS}`);
+        const result = await translateChapterPipeline(
+          item,
+          itemIndex,
+          chapterState,
+          keys,
+          keyOffset + attempt - 1,
+          signal,
+          pronounMemory,
+        );
+        await persistPipelineResult(result);
+        return result;
+      } catch (reason) {
+        if (reason instanceof DOMException && reason.name === "AbortError") throw reason;
+        lastError = reason;
+        setChapters((items) => items.map((current) => current.id === item.id ? item : current));
+        setStreamStatus(null);
+        if (attempt < MAX_CHAPTER_ATTEMPTS) {
+          const detail = reason instanceof Error ? reason.message : "Lỗi không xác định";
+          setNotice(`${item.title} lỗi lần ${attempt}/${MAX_CHAPTER_ATTEMPTS}: ${detail}. Thử lại sau 5 giây…`);
+          await waitForGeminiRetry(5000, signal);
+        }
+      }
+    }
+    const detail = lastError instanceof Error ? lastError.message : "Lỗi không xác định";
+    throw new Error(`${item.title} vẫn lỗi sau ${MAX_CHAPTER_ATTEMPTS} lần: ${detail}`);
+  }
+
   async function translateSelectedChapter(apiKeys: string[]) {
     if (!chapter) return;
     const controller = new AbortController();
@@ -732,8 +807,16 @@ export function App() {
     setNotice(`Đang chạy pipeline: ${chapter.title}`);
     try {
       const index = chapters.findIndex((item) => item.id === chapter.id);
-      const result = await translateChapterPipeline(chapter, index, chapters, apiKeys, 0, controller.signal, project?.pronouns || "");
-      await persistPipelineResult(result);
+      await translateAndPersistChapter(
+        chapter,
+        index,
+        chapters,
+        apiKeys,
+        0,
+        controller.signal,
+        project?.pronouns || "",
+        "Pipeline",
+      );
       setNotice("Đã dịch, hiệu đính, cập nhật xưng hô và review chương.");
     } catch (reason) {
       setChapters((items) => items.map((item) => item.id === chapter.id ? chapter : item));
@@ -815,7 +898,7 @@ export function App() {
         if (!batch.length) continue;
         setNotice(`Glossary: chương ${offset + 1}-${offset + batch.length}/${chapters.length}`);
         const prompt = glossaryPrompt(batch, glossary);
-        let incoming: Array<{ source: string; target: string }> = [];
+        let incoming: ReturnType<typeof parseGlossaryResponse> = [];
         let lastError: unknown;
         for (let attempt = 0; attempt < 3 && !incoming.length; attempt += 1) {
           try {
@@ -825,7 +908,7 @@ export function App() {
         }
         if (!incoming.length) throw lastError || new Error("Gemini không trả về glossary hợp lệ sau 3 lần; tiến độ chưa được tăng.");
         const merged = new Map(glossary.map((item) => [item.source, item]));
-        incoming.forEach((item) => merged.set(item.source, { id: merged.get(item.source)?.id || crypto.randomUUID(), ...item }));
+        incoming.forEach((item) => merged.set(item.source, { ...merged.get(item.source), id: merged.get(item.source)?.id || crypto.randomUUID(), ...item }));
         glossary = [...merged.values()];
         const glossaryIndex = Math.min(offset + segment.length, chapters.length);
         await db.projects.update(project.id, { glossary, glossaryIndex, updatedAt: now() });
@@ -856,24 +939,43 @@ export function App() {
     abortRef.current = controller;
     setBusy("translate-all");
     setError("");
-    let activeItem: Chapter | null = null;
     try {
       let workingChapters = [...chapters];
       let pronounMemory = project.pronouns || "";
+      let completed = 0;
+      const skipped: string[] = [];
       for (let index = 0; index < queue.length; index += 1) {
         const item = queue[index];
-        activeItem = item;
         setChapterId(item.id);
-        setNotice(`Pipeline ${index + 1}/${queue.length}: ${item.title}`);
         const itemIndex = workingChapters.findIndex((current) => current.id === item.id);
-        const result = await translateChapterPipeline(item, itemIndex, workingChapters, apiKeys, index, controller.signal, pronounMemory);
-        await persistPipelineResult(result);
-        pronounMemory = result.pronouns;
-        workingChapters = workingChapters.map((current) => current.id === result.chapter.id ? result.chapter : current);
+        try {
+          const result = await translateAndPersistChapter(
+            item,
+            itemIndex,
+            workingChapters,
+            apiKeys,
+            index,
+            controller.signal,
+            pronounMemory,
+            `Pipeline ${index + 1}/${queue.length}`,
+          );
+          pronounMemory = result.pronouns;
+          workingChapters = workingChapters.map((current) => current.id === result.chapter.id ? result.chapter : current);
+          completed += 1;
+        } catch (reason) {
+          if (reason instanceof DOMException && reason.name === "AbortError") throw reason;
+          skipped.push(item.title);
+          const detail = reason instanceof Error ? reason.message : "Lỗi không xác định";
+          console.error(`Bỏ qua chương ${item.title}: ${detail}`);
+          setNotice(`Đã bỏ qua ${item.title} sau ${MAX_CHAPTER_ATTEMPTS} lần lỗi; chuyển sang chương tiếp theo.`);
+        }
       }
-      setNotice(`Đã hoàn tất pipeline cho ${queue.length} chương.`);
+      setNotice(
+        skipped.length
+          ? `Đã hoàn tất ${completed}/${queue.length} chương; bỏ qua ${skipped.length} chương lỗi: ${skipped.join(", ")}.`
+          : `Đã hoàn tất pipeline cho ${queue.length} chương.`,
+      );
     } catch (reason) {
-      if (activeItem) setChapters((items) => items.map((item) => item.id === activeItem?.id ? activeItem : item));
       if (reason instanceof DOMException && reason.name === "AbortError") setNotice("Đã dừng dịch đến hết sau chương vừa hoàn thành.");
       else setError(reason instanceof Error ? reason.message : "Dịch đến hết thất bại.");
     } finally {
@@ -1080,6 +1182,7 @@ export function App() {
         </header>
 
         {(notice || error) && <div role="status" className={error ? "message error" : "message success"}>{error || notice}<button aria-label="Đóng thông báo" onClick={() => { setError(""); setNotice(""); }}>×</button></div>}
+        {view === "translate" && chapter?.glossaryValidation && !chapter.glossaryValidation.passed && <details className="message error"><summary>Còn {chapter.glossaryValidation.errors.length} lỗi glossary cần kiểm tra</summary><pre>{chapter.glossaryValidation.errors.join("\n")}</pre></details>}
 
         {!project ? <EmptyProject onCreate={() => void createProject()} onImport={() => novelImportRef.current?.click()} importing={importingNovel} /> : view === "translate" ? (
           <TranslateView
@@ -1251,12 +1354,31 @@ function BatchSizeField({ value, busy, onChange }: { value: number; busy: boolea
   return <label className="batch-size-field"><span>Số chương mỗi batch</span><input type="number" min={1} max={100} step={1} value={value} disabled={busy} onChange={(event) => { const next = Number(event.target.value); if (Number.isInteger(next) && next >= 1 && next <= 100) onChange(next); }} /></label>;
 }
 
+function GlossaryMetadata({ item, onChange }: { item: NonNullable<Project["glossary"]>[number]; onChange: (fields: Partial<NonNullable<Project["glossary"]>[number]>) => void }) {
+  const common = item.type?.trim().toLowerCase() === "common";
+  const targetOnly = common || ["yes", "true"].includes((item.extra_metadata?.target_only || "no").trim().toLowerCase());
+  const setTargetOnly = (checked: boolean) => {
+    const extra_metadata = { ...item.extra_metadata };
+    if (checked) extra_metadata.target_only = "yes";
+    else delete extra_metadata.target_only;
+    onChange({ extra_metadata, extended: true, ...(checked ? { first_vi: false, first_en: false, brackets: false } : {}) });
+  };
+  return <div className="glossary-metadata">
+    <label>Type <input value={item.type || "Unknown"} aria-label="Loại thuật ngữ" onChange={(event) => onChange({ type: event.target.value, extended: true })} /></label>
+    <label title={common ? "Type Common luôn chỉ xuất bản dịch" : "Chỉ xuất phần đích, không giữ nguyên văn hoặc chú giải song ngữ"}><input type="checkbox" aria-label="Chỉ xuất bản dịch (target_only)" checked={targetOnly} disabled={common} onChange={(event) => setTargetOnly(event.target.checked)} /> Target only (chỉ xuất bản dịch)</label>
+    <label><input type="checkbox" checked={Boolean(item.first_vi)} onChange={(event) => onChange({ first_vi: event.target.checked, ...(event.target.checked ? { first_en: false } : {}), extended: true })} /> Chú giải Việt lần đầu mỗi chương</label>
+    <label><input type="checkbox" checked={Boolean(item.first_en)} onChange={(event) => onChange({ first_en: event.target.checked, ...(event.target.checked ? { first_vi: false } : {}), extended: true })} /> Chú giải English lần đầu mỗi chương</label>
+    <label><input type="checkbox" checked={Boolean(item.brackets)} onChange={(event) => onChange({ brackets: event.target.checked, extended: true })} /> Ngoặc vuông</label>
+    <span>{targetOnly ? (common ? "Common: luôn dùng bản dịch" : "target_only=yes: chỉ dùng bản dịch") : item.extended ? "Giữ thuật ngữ English" : "Định dạng cũ: dịch nguồn → đích"}</span>
+  </div>;
+}
+
 function TerminologyView({ project, busy, total, onProject, onRun }: { project: Project; busy: boolean; total: number; onProject: (fields: Partial<Project>) => void; onRun: () => void }) {
   const [query, setQuery] = useState("");
   const glossary = project.glossary || [];
   const visible = glossary.filter((item) => `${item.source} ${item.target}`.toLocaleLowerCase("vi").includes(query.toLocaleLowerCase("vi")));
   const updateEntry = (id: string, fields: Partial<(typeof glossary)[number]>) => onProject({ glossary: glossary.map((item) => item.id === id ? { ...item, ...fields } : item) });
-  return <div className="memory-view terminology-view"><div className="section-intro"><div><p className="eyebrow">BỘ NHỚ DỰ ÁN</p><h2>Thuật ngữ & phong cách</h2><p>{glossary.length} thuật ngữ · {Math.min(project.glossaryIndex || 0, total)}/{total} chương đã quét · Batch {project.glossaryBatchSize || 30} chương.</p></div><div className="head-actions"><label className="search-box"><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm nguyên văn hoặc bản dịch" /></label><BatchSizeField value={project.glossaryBatchSize || 30} busy={busy} onChange={(glossaryBatchSize) => onProject({ glossaryBatchSize })} /><button className="button outline" onClick={() => onProject({ glossary: [...glossary, { id: crypto.randomUUID(), source: "", target: "" }] })}><Plus size={17} />Thêm</button><button className="button primary" disabled={busy || !total} onClick={onRun}><Sparkle size={17} />{busy ? "Đang cập nhật..." : (project.glossaryIndex || 0) >= total && total ? "Quét lại toàn bộ" : "Tạo glossary"}</button></div></div><div className="terminology-grid"><section className="memory-card"><div className="memory-card-head"><div><small>GLOSSARY</small><strong>{visible.length} thuật ngữ</strong></div><span>Đã đồng bộ</span></div><div className="glossary-list">{visible.length ? visible.map((item) => <div className="glossary-row" key={item.id}><textarea rows={1} aria-label="Nguyên văn" value={item.source} onChange={(event) => updateEntry(item.id, { source: event.target.value })} placeholder="Nguyên văn" spellCheck={false} /><i>→</i><textarea rows={1} aria-label="Bản dịch" value={item.target} onChange={(event) => updateEntry(item.id, { target: event.target.value })} placeholder="Bản dịch" spellCheck={false} /><button aria-label="Xóa thuật ngữ" onClick={() => onProject({ glossary: glossary.filter((entry) => entry.id !== item.id) })}><Trash size={16} /></button></div>) : <div className="memory-empty">Chưa có thuật ngữ phù hợp.</div>}</div></section><section className="memory-card context-card"><div className="memory-card-head"><div><small>STYLE NOTE</small><strong>Quy tắc biên tập</strong></div><span>Tự động lưu</span></div><textarea value={project.styleNotes || ""} onChange={(event) => onProject({ styleNotes: event.target.value })} placeholder="Ví dụ: Giữ giọng kể tự nhiên; dùng dấu ngoặc kép cho hội thoại; không Việt hóa tên riêng..." spellCheck={false} /></section></div></div>;
+  return <div className="memory-view terminology-view"><div className="section-intro"><div><p className="eyebrow">BỘ NHỚ DỰ ÁN</p><h2>Thuật ngữ & phong cách</h2><p>{glossary.length} thuật ngữ · {Math.min(project.glossaryIndex || 0, total)}/{total} chương đã quét · Batch {project.glossaryBatchSize || 30} chương.</p></div><div className="head-actions"><label className="search-box"><MagnifyingGlass size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm nguyên văn hoặc bản dịch" /></label><BatchSizeField value={project.glossaryBatchSize || 30} busy={busy} onChange={(glossaryBatchSize) => onProject({ glossaryBatchSize })} /><button className="button outline" onClick={() => onProject({ glossary: [...glossary, { id: crypto.randomUUID(), source: "", target: "" }] })}><Plus size={17} />Thêm</button><button className="button primary" disabled={busy || !total} onClick={onRun}><Sparkle size={17} />{busy ? "Đang cập nhật..." : (project.glossaryIndex || 0) >= total && total ? "Quét lại toàn bộ" : "Tạo glossary"}</button></div></div><div className="terminology-grid"><section className="memory-card"><div className="memory-card-head"><div><small>GLOSSARY</small><strong>{visible.length} thuật ngữ</strong></div><span>Đã đồng bộ</span></div><div className="glossary-list">{visible.length ? visible.map((item) => <div className="glossary-row" key={item.id}><textarea rows={1} aria-label="Nguyên văn" value={item.source} onChange={(event) => updateEntry(item.id, { source: event.target.value })} placeholder="Nguyên văn" spellCheck={false} /><i>→</i><textarea rows={1} aria-label="Bản dịch" value={item.target} onChange={(event) => updateEntry(item.id, { target: event.target.value })} placeholder="Bản dịch" spellCheck={false} /><button aria-label="Xóa thuật ngữ" onClick={() => onProject({ glossary: glossary.filter((entry) => entry.id !== item.id) })}><Trash size={16} /></button><GlossaryMetadata item={item} onChange={(fields) => updateEntry(item.id, fields)} /></div>) : <div className="memory-empty">Chưa có thuật ngữ phù hợp.</div>}</div></section><section className="memory-card context-card"><div className="memory-card-head"><div><small>STYLE NOTE</small><strong>Quy tắc biên tập</strong></div><span>Tự động lưu</span></div><textarea value={project.styleNotes || ""} onChange={(event) => onProject({ styleNotes: event.target.value })} placeholder="Ví dụ: Giữ giọng kể tự nhiên; dùng dấu ngoặc kép cho hội thoại; không Việt hóa tên riêng..." spellCheck={false} /></section></div></div>;
 }
 
 type PronounEntry = { speaker?: string; listener?: string; speaker_self?: string; speaker_to_listener?: string; relationship_status?: string; emotional_tone?: string; chapter_number?: number; [key: string]: unknown };
@@ -1331,7 +1453,7 @@ function SettingsView({ project, settings, apiKey, onProject, onSettings, onApiK
     <section className="settings-api"><h3><Key size={20} />Gemini API</h3><div className="form-grid"><label className="wide"><span>Danh sách API key</span><textarea className="api-key-editor" rows={5} autoComplete="off" value={apiKey} onChange={(event) => onApiKey(event.target.value)} placeholder={"AIza...\nAIza...\nMỗi key một dòng"} /><small>{parseApiKeys(apiKey).length} key hợp lệ. App tự luân phiên và chuyển key khi gặp lỗi quota hoặc rate-limit.</small></label><label className="check wide"><input type="checkbox" checked={settings.rememberApiKey} onChange={(event) => onSettings({ ...settings, rememberApiKey: event.target.checked })} /><span>Ghi nhớ danh sách API key trong IndexedDB trên thiết bị này</span></label></div></section>
     <section className="prompt-settings"><div className="prompt-settings-heading"><div><h3><Sparkle size={20} />Prompt dịch</h3><p>Vai trò và nhiệm vụ mặc định của app local. Dữ liệu chương được chèn tự động.</p></div><button className="button outline" onClick={() => onProject({ promptRole: DEFAULT_TRANSLATION_ROLE, promptTask: DEFAULT_TRANSLATION_TASK })}>Khôi phục mặc định</button></div><div className="form-grid prompt-editor-grid"><label><span>Vai trò</span><textarea rows={10} value={project.promptRole ?? DEFAULT_TRANSLATION_ROLE} onChange={(event) => onProject({ promptRole: event.target.value })} spellCheck={false} /></label><label><span>Nhiệm vụ</span><textarea rows={10} value={project.promptTask ?? DEFAULT_TRANSLATION_TASK} onChange={(event) => onProject({ promptTask: event.target.value })} spellCheck={false} /></label></div></section>
     <section className="prompt-settings"><div className="prompt-settings-heading"><div><h3><Sparkle size={20} />Prompt hiệu đính</h3><p>Chỉnh riêng cho pipeline hiệu đính của truyện hiện tại.</p></div><button className="button outline" onClick={() => onProject({ polishPromptRole: DEFAULT_POLISH_ROLE, polishPromptTask: DEFAULT_POLISH_TASK })}>Khôi phục mặc định</button></div><div className="form-grid prompt-editor-grid"><label><span>Vai trò</span><textarea rows={10} value={project.polishPromptRole ?? DEFAULT_POLISH_ROLE} onChange={(event) => onProject({ polishPromptRole: event.target.value })} spellCheck={false} /></label><label><span>Nhiệm vụ</span><textarea rows={10} value={project.polishPromptTask ?? DEFAULT_POLISH_TASK} onChange={(event) => onProject({ polishPromptTask: event.target.value })} spellCheck={false} /></label></div></section>
-    {taskDefinitions.map((task) => { const value = tasks[task.id]; return <section className="task-settings" key={task.id}><div className="task-settings-heading"><div><h3><Sparkle size={20} />{task.label}</h3><p>{task.description}</p></div></div><div className="form-grid"><label><span>Model</span><input value={value.model} onChange={(event) => updateTask(task.id, { model: event.target.value })} /></label><label><span>Token đầu ra tối đa</span><input type="number" min="1000" step="1000" value={value.maxOutputTokens ?? ""} onChange={(event) => updateTask(task.id, { maxOutputTokens: event.target.value ? Number(event.target.value) : null })} placeholder="Mặc định của model" /><small>Để trống để Gemini tự chọn giới hạn.</small></label><label className="wide"><span>System prompt tùy chỉnh</span><textarea rows={5} value={value.systemInstruction} onChange={(event) => updateTask(task.id, { systemInstruction: event.target.value })} placeholder="Để trống để dùng system prompt mặc định của tác vụ." /><small>Khi có nội dung, prompt này sẽ thay thế system prompt mặc định.</small></label></div></section>; })}
+    {taskDefinitions.map((task) => { const value = tasks[task.id]; return <section className="task-settings" key={task.id}><div className="task-settings-heading"><div><h3><Sparkle size={20} />{task.label}</h3><p>{task.description}</p></div></div><div className="form-grid"><label><span>Model</span><input value={value.model} onChange={(event) => updateTask(task.id, { model: event.target.value })} /></label><label><span>Token đầu ra tối đa</span><input type="number" min="1000" step="1000" value={value.maxOutputTokens ?? ""} onChange={(event) => updateTask(task.id, { maxOutputTokens: event.target.value ? Number(event.target.value) : null })} placeholder="Mặc định của model" /><small>Để trống để Gemini tự chọn giới hạn.</small></label><label><span>Context budget (tokens)</span><input type="number" min="4096" max="10000000" step="1000" value={value.contextTokens ?? 128000} onChange={(event) => updateTask(task.id, { contextTokens: Number(event.target.value) || 128000 })} /><small>Set the context limit of the selected model. Glossary correction uses the proofreading model.</small></label><label className="wide"><span>System prompt tùy chỉnh</span><textarea rows={5} value={value.systemInstruction} onChange={(event) => updateTask(task.id, { systemInstruction: event.target.value })} placeholder="Để trống để dùng system prompt mặc định của tác vụ." /><small>Khi có nội dung, prompt này sẽ thay thế system prompt mặc định.</small></label></div></section>; })}
     <section className="settings-language"><h3><Translate size={20} />Ngôn ngữ dự án</h3><div className="form-grid"><label><span>Ngôn ngữ nguồn</span><input value={project.sourceLanguage} onChange={(event) => onProject({ sourceLanguage: event.target.value })} /></label><label><span>Ngôn ngữ đích</span><input value={project.targetLanguage} onChange={(event) => onProject({ targetLanguage: event.target.value })} /></label></div></section>
   </div><button className="button primary save-settings" onClick={onSave}>Lưu thiết lập</button></div>;
 }

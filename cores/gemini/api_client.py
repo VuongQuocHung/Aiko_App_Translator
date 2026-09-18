@@ -65,6 +65,11 @@ def generate_content(
         contents=contents,
         config=types.GenerateContentConfig(**config),
     )
+    for candidate in getattr(response, "candidates", None) or []:
+        reason = getattr(candidate, "finish_reason", None)
+        reason = getattr(reason, "name", reason)
+        if reason and str(reason) not in {"STOP", "FinishReason.STOP"}:
+            raise ValueError(f"Gemini chưa hoàn tất output: {reason}")
     try:
         text = response.text
         if not text.strip():

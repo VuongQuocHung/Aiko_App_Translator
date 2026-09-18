@@ -18,7 +18,10 @@ from cores.stages import (
     stage_model_and_thinking,
     stage_provider,
 )
-from cores.translation.prompts import build_single_prompt, with_character_document_instruction
+from cores.translation.prompts import build_single_prompt, build_polish_prompt, with_character_document_instruction
+from cores.stages.budget import ContextBudgetError, estimate_tokens, split_source, stage_limits, fit_request
+from cores.context.glossary import glossary_from_context, parse_glossary
+from cores.context.validation import introduced_terms, CHAPTER_HEADING
 
 
 def provider(stage):
@@ -74,6 +77,37 @@ def translate_r19_fragments(entries):
 
 
 def translate_chapter(chapter, chapter_number, context_text="", pronoun_context=""):
+    """Prefer a whole chapter; retain aligned source/draft segments if it must split."""
+    entries = parse_glossary(glossary_from_context(context_text))
+    seen = set(chapter.get("_glossary_introduced", ()))
+    segments = []
+    def translate_piece(piece, depth=0):
+        piece = {**piece, "_glossary_introduced": sorted(seen)}
+        try:
+            _context_limit, output_limit = stage_limits("translate", provider("translate"), option)
+            if estimate_tokens(piece.get("content", "")) * 2 > output_limit:
+                raise ContextBudgetError("Nguồn có thể vượt giới hạn đầu ra; chia theo đoạn văn.")
+            result = _translate_whole(piece, chapter_number, context_text, pronoun_context)
+        except ContextBudgetError:
+            if depth >= 12:
+                raise
+            left, right = split_source(piece.get("content", ""))
+            print("[CONTEXT] Chia chương theo đoạn; giữ trạng thái thuật ngữ trong chương.")
+            translate_piece({**piece, "content": left}, depth + 1)
+            translate_piece({**piece, "content": right}, depth + 1)
+            return
+        title, content = result
+        segments.append({**piece, "title_translation": title, "translation": content})
+        if CHAPTER_HEADING.search(content):
+            seen.clear()
+        seen.update(introduced_terms(content, entries))
+    translate_piece(chapter)
+    if len(segments) > 1:
+        chapter["_translation_segments"] = segments
+    return segments[0]["title_translation"], "\n\n".join(s["translation"] for s in segments)
+
+
+def _translate_whole(chapter, chapter_number, context_text="", pronoun_context=""):
     masked_chapters, r19_entries = prepare_chapters([chapter])
     masked_context, masked_pronouns = mask_contexts(
         [context_text, pronoun_context], r19_entries
@@ -92,6 +126,15 @@ def translate_chapter(chapter, chapter_number, context_text="", pronoun_context=
     )
     provider_id = provider("translate")
     documents = build_reference_documents(chapter, pronoun_context)
+    polish_provider = provider("polish")
+    if polish_provider != "off" and model_and_thinking("polish", polish_provider)[0].lower() not in {"", "none"}:
+        # Reserve room for both original and a potentially longer Vietnamese draft
+        # before choosing chunk boundaries, keeping source/draft alignment exact.
+        simulated = {**chapter, "title_translation": chapter.get("title", ""),
+                     "translation": chapter.get("content", "") * 2}
+        preview = build_polish_prompt(simulated, masked_context, masked_pronouns)
+        window, output = stage_limits("polish", polish_provider, option)
+        fit_request(preview, documents, context_tokens=window, output_tokens=output)
     if any(item["name"] == "characters.md" for item in documents):
         prompt = with_character_document_instruction(prompt)
     response, model = generate("translate", prompt, documents)

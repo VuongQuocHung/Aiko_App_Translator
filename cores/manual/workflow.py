@@ -91,7 +91,8 @@ def translate_chapter(chapter, chapter_number, context_text="", pronoun_context=
 
 def run_translation():
     return run_single_translation(
-        translate_chapter, RAW_DIR, TRANSLATED_DIR, CONTEXT_JSON
+        translate_chapter, RAW_DIR, TRANSLATED_DIR, CONTEXT_JSON,
+        allow_review_retry=False,
     )
 
 

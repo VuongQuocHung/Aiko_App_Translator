@@ -68,6 +68,34 @@ class ContextServiceTests(unittest.TestCase):
                     },
                 )
 
+    def test_prompt_fields_accept_up_to_one_hundred_thousand_characters(self):
+        data = {}
+        fields = {
+            "prompt_role": "r" * 100000,
+            "prompt_task": "t" * 100000,
+            "polish_prompt_role": "p" * 100000,
+            "polish_prompt_task": "e" * 100000,
+        }
+
+        ContextService._save_prompt_fields(data, fields)
+
+        self.assertEqual(100000, len(data["prompt_role"]))
+        self.assertEqual(100000, len(data["prompt_task"]))
+        self.assertEqual(100000, len(data["polish_prompt_role"]))
+        self.assertEqual(100000, len(data["polish_prompt_task"]))
+
+    def test_prompt_fields_reject_more_than_one_hundred_thousand_characters(self):
+        with self.assertRaisesRegex(ValueError, "100.000 ký tự"):
+            ContextService._save_prompt_fields(
+                {},
+                {
+                    "prompt_role": "r" * 100001,
+                    "prompt_task": "task",
+                    "polish_prompt_role": "role",
+                    "polish_prompt_task": "task",
+                },
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
