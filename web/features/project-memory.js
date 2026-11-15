@@ -8,13 +8,12 @@ export function glossaryLine(item) {
 }
 
 function glossaryTargetOnly(item) {
-  return String(item.type||'').trim().toLowerCase()==='common'||['yes','true'].includes(String(item.extra_metadata?.target_only||'no').trim().toLowerCase());
+  return ['yes','true'].includes(String(item.extra_metadata?.target_only||'no').trim().toLowerCase());
 }
 
 function glossaryModeLabel(item) {
-  if(String(item.type||'').trim().toLowerCase()==='common')return 'Common: luôn dùng bản dịch';
   if(glossaryTargetOnly(item))return 'target_only=yes: chỉ dùng bản dịch';
-  return item.extended?'Giữ thuật ngữ English':'Định dạng cũ: dịch nguồn → đích';
+  return item.extended?'Hiển thị theo các cờ đã chọn':'Định dạng cũ: dịch nguồn → đích';
 }
 
 export function createProjectMemoryFeature({api,escapeHtml,executePipeline,getSetting,markdownToHtml,navigationCounts,prettyName,saveChapter,state,toast}) {
@@ -168,9 +167,8 @@ export function createProjectMemoryFeature({api,escapeHtml,executePipeline,getSe
     $('#contextSummary').textContent=state.project?`${state.project} · context đến chương ${context.index||0}`:'Chưa chọn truyện.';
     $('#glossaryCount').textContent=`${items.length}/${(context.glossary||[]).length} thuật ngữ`;
     $('#glossaryList').innerHTML=items.length?items.map(item=>{
-      const common=String(item.type||'').trim().toLowerCase()==='common';
       const targetOnly=glossaryTargetOnly(item);
-      return `<div class="glossary-row" data-glossary-index="${item.index}"><input data-glossary-field="source" value="${escapeHtml(item.source)}" placeholder="Nguyên văn" aria-label="Nguyên văn thuật ngữ"><i>→</i><input data-glossary-field="target" value="${escapeHtml(item.target)}" placeholder="Bản dịch" aria-label="Bản dịch thuật ngữ"><button type="button" data-delete-glossary aria-label="Xóa ${escapeHtml(item.source||'thuật ngữ')}">Xóa</button><div class="glossary-metadata"><label>Type <input data-glossary-field="type" value="${escapeHtml(item.type||'Unknown')}" placeholder="Skill, Name, Alias…" aria-label="Loại thuật ngữ"></label><label class="target-only-control ${targetOnly?'active':''}" title="${common?'Type Common luôn chỉ xuất bản dịch':'Chỉ xuất phần đích, không giữ nguyên văn hoặc chú giải song ngữ'}"><input type="checkbox" data-glossary-field="target_only" aria-label="Chỉ xuất bản dịch (target_only)" ${targetOnly?'checked':''} ${common?'disabled':''}> Target only</label><label><input type="checkbox" data-glossary-field="first_vi" ${item.first_vi?'checked':''}> Chú giải Việt lần đầu</label><label><input type="checkbox" data-glossary-field="first_en" ${item.first_en?'checked':''}> Chú giải English lần đầu</label><label><input type="checkbox" data-glossary-field="brackets" ${item.brackets?'checked':''}> Ngoặc vuông</label><span data-glossary-mode>${escapeHtml(glossaryModeLabel(item))}</span></div></div>`;
+      return `<div class="glossary-row" data-glossary-index="${item.index}"><input data-glossary-field="source" value="${escapeHtml(item.source)}" placeholder="Nguyên văn" aria-label="Nguyên văn thuật ngữ"><i>→</i><input data-glossary-field="target" value="${escapeHtml(item.target)}" placeholder="Bản dịch" aria-label="Bản dịch thuật ngữ"><button type="button" data-delete-glossary aria-label="Xóa ${escapeHtml(item.source||'thuật ngữ')}">Xóa</button><div class="glossary-metadata"><label>Type <input data-glossary-field="type" value="${escapeHtml(item.type||'Unknown')}" placeholder="Skill, Name, Alias…" aria-label="Loại thuật ngữ"></label><label class="target-only-control ${targetOnly?'active':''}" title="Chỉ xuất phần đích, không giữ nguyên văn hoặc chú giải song ngữ"><input type="checkbox" data-glossary-field="target_only" aria-label="Chỉ xuất bản dịch (target_only)" ${targetOnly?'checked':''}> Target only</label><label><input type="checkbox" data-glossary-field="first_vi" ${item.first_vi?'checked':''}> Chú giải Việt lần đầu</label><label><input type="checkbox" data-glossary-field="first_en" ${item.first_en?'checked':''}> Chú giải English lần đầu</label><label><input type="checkbox" data-glossary-field="brackets" ${item.brackets?'checked':''}> Ngoặc vuông</label><span data-glossary-mode>${escapeHtml(glossaryModeLabel(item))}</span></div></div>`;
     }).join(''):'<div class="memory-empty">Không có thuật ngữ phù hợp.</div>';
     $('#saveGlossaryButton').disabled=!state.glossaryDirty;
     $('#glossarySaveState').textContent=state.glossaryDirty?'Có thay đổi chưa lưu':'Đã đồng bộ';
@@ -448,10 +446,9 @@ export function createProjectMemoryFeature({api,escapeHtml,executePipeline,getSe
         if(field==='first_en'&&input.checked){item.first_vi=false;row.querySelector('[data-glossary-field="first_vi"]').checked=false;}
         if(['type','first_vi','first_en','brackets'].includes(field))item.extended=true;
       }
-      const common=String(item.type||'').trim().toLowerCase()==='common';
       const targetOnly=glossaryTargetOnly(item);
       const targetOnlyInput=row.querySelector('[data-glossary-field="target_only"]');
-      targetOnlyInput.checked=targetOnly;targetOnlyInput.disabled=common;
+      targetOnlyInput.checked=targetOnly;
       targetOnlyInput.closest('label').classList.toggle('active',targetOnly);
       row.querySelector('[data-glossary-mode]').textContent=glossaryModeLabel(item);
       markGlossaryDirty();

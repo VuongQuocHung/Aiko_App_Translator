@@ -45,7 +45,7 @@ Entry không có metadata giữ hành vi dịch nguồn → đích cũ. Đây l�
 | no | no | no | `English` | `English` |
 | no | no | yes | `[English]` | `[English]` |
 
-`type=Common` hoặc `target_only=yes` ưu tiên cao hơn ba cờ trên và luôn chỉ xuất đích tiếng Việt thuần.
+Chỉ `target_only=yes` ưu tiên cao hơn các cờ hiển thị và luôn xuất đích tiếng Việt thuần. `type=Common` chỉ phân loại thuật ngữ và tuân thủ `first_vi`, `first_en`, `brackets`, `target_only` như mọi type khác.
 
 Không tạo chú giải trùng như `Lucid (Lucid)`, kể cả khi hai vế của entry giống nhau. Tiêu đề chương, glossary, ví dụ, prompt và tài liệu tham khảo không được tính là lần xuất hiện trong nội dung truyện.
 

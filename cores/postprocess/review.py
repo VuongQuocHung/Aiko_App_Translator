@@ -9,9 +9,89 @@ from concurrent.futures import ThreadPoolExecutor
 from cores.job_events import emit_job_event
 from cores.retry import managed_chapter_attempt
 from cores.storage.project import load_json, save_json
+from cores.context.glossary import filter_glossary, glossary_from_context, parse_glossary
+from cores.context.rules import GLOSSARY_RULES
+from cores.context.validation import is_target_only, validate_glossary
 
 
 MAX_BACKGROUND_REVIEW_ATTEMPTS = 3
+
+
+def glossary_review_issues(
+    content, raw_content, context_text="", *, title="", raw_title=""
+):
+    """Return deterministic glossary-format issues for a reviewed chapter.
+
+    The model is still responsible for semantic review, but glossary display
+    rules are precise enough to validate locally.  This keeps a model that
+    overlooks a metadata flag from producing a falsely clean review.
+    """
+    glossary_text = glossary_from_context(context_text or "")
+    # Review prompts may carry the complete project glossary.  Restrict the
+    # deterministic pass to terms evidenced by this chapter, while preserving
+    # aliases and target-linked entries through filter_glossary().
+    relevance_text = "\n".join(part for part in (raw_title, raw_content) if part)
+    if relevance_text:
+        glossary_text = filter_glossary(glossary_text, relevance_text)
+    entries = parse_glossary(glossary_text)
+    violations = validate_glossary(content or "", entries, raw_content or "")
+    # Chapter headings do not participate in first-mention state, but the
+    # target-only exception explicitly applies to titles as well.
+    if title or raw_title:
+        title_entries = tuple(entry for entry in entries if is_target_only(entry))
+        violations.extend(
+            validate_glossary(title or "", title_entries, raw_title or "")
+        )
+    return [
+        {
+            "type": "thuật ngữ",
+            "severity": "nhẹ",
+            "original": violation.term,
+            "original_vi": violation.excerpt,
+            "suggestion": (
+                f"Sửa lỗi glossary `{violation.code}` cho thuật ngữ "
+                f"`{violation.term}` theo quy tắc metadata."
+            ),
+            "glossary_code": violation.code,
+            "source": "glossary_validator",
+        }
+        for violation in violations
+    ]
+
+
+def add_glossary_review_issues(
+    review_data,
+    content,
+    raw_content,
+    context_text="",
+    *,
+    title="",
+    raw_title="",
+):
+    """Merge local glossary validation findings into an AI review object."""
+    if not isinstance(review_data, dict):
+        return review_data
+    issues = review_data.setdefault("issues", [])
+    if not isinstance(issues, list):
+        issues = []
+        review_data["issues"] = issues
+    existing = {
+        (item.get("glossary_code"), item.get("original"))
+        for item in issues
+        if isinstance(item, dict)
+    }
+    for issue in glossary_review_issues(
+        content,
+        raw_content,
+        context_text,
+        title=title,
+        raw_title=raw_title,
+    ):
+        key = (issue["glossary_code"], issue["original"])
+        if key not in existing:
+            issues.append(issue)
+            existing.add(key)
+    return review_data
 
 
 def build_reference_documents(*args, **kwargs):
@@ -36,6 +116,10 @@ def build_translation_review_prompt(
 
 ## Tiêu chí review:
 {criteria}
+
+## Quy tắc glossary bắt buộc khi review:
+Đánh giá cả việc dùng đúng thuật ngữ và việc trình bày đúng metadata của từng entry. Các quy tắc sau là yêu cầu kiểm tra, không phải nội dung để dịch:
+{GLOSSARY_RULES}
 
 ## Thuật ngữ tham chiếu:
 {context_text}
@@ -168,6 +252,15 @@ def run_background_review(
                 review_parsed = {"raw": clean}
         else:
             review_parsed = {"raw": clean}
+
+        add_glossary_review_issues(
+            review_parsed,
+            content,
+            raw_content,
+            context_text,
+            title=title,
+            raw_title=raw_title,
+        )
 
         # Lưu vào review.json (thread-safe)
         with runtime._review_lock:

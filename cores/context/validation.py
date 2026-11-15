@@ -31,7 +31,7 @@ def term_pattern(term):
 def is_target_only(entry):
     """Whether an entry must be rendered as its plain target-language value."""
     value = entry.extra_metadata.get("target_only", "no")
-    return entry.type.casefold() == "common" or str(value).strip().casefold() in {"yes", "true"}
+    return str(value).strip().casefold() in {"yes", "true"}
 
 
 def chapter_bodies(text):
@@ -113,11 +113,10 @@ def validate_glossary(text, entries, source="", *, introduced=()):
                     report(entry, "redundant_annotation", start, suffix + annotation.end())
                 continue
             if is_target_only(entry):
-                prefix = "common" if entry.type.casefold() == "common" else "target_only"
                 if entry.english.casefold() != entry.vietnamese.casefold():
-                    report(entry, f"{prefix}_requires_vietnamese", start, suffix + annotation.end() if annotation else end)
+                    report(entry, "target_only_requires_vietnamese", start, suffix + annotation.end() if annotation else end)
                 elif bracketed or annotation:
-                    report(entry, f"{prefix}_plain_vietnamese", start, suffix + annotation.end() if annotation else end)
+                    report(entry, "target_only_plain_vietnamese", start, suffix + annotation.end() if annotation else end)
                 continue
             if entry.first_en:
                 report(entry, "english_without_vietnamese", start, suffix + annotation.end() if annotation else end)
@@ -155,13 +154,12 @@ def validate_glossary(text, entries, source="", *, introduced=()):
             if entry.first_en:
                 continue
             if is_target_only(entry):
-                prefix = "common" if entry.type.casefold() == "common" else "target_only"
                 for match in re.finditer(term_pattern(entry.vietnamese), body, re.I):
                     if any(a < match.end() and match.start() < b for a, b in protected):
                         continue
                     start, end = match.span()
                     if start > 0 and body[start - 1] == "[" and body[end:end + 1] == "]":
-                        report(entry, f"{prefix}_plain_vietnamese", start, end)
+                        report(entry, "target_only_plain_vietnamese", start, end)
                     protected.append(match.span())
                 continue
             for match in re.finditer(term_pattern(entry.vietnamese), body, re.I):

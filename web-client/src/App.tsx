@@ -1355,8 +1355,7 @@ function BatchSizeField({ value, busy, onChange }: { value: number; busy: boolea
 }
 
 function GlossaryMetadata({ item, onChange }: { item: NonNullable<Project["glossary"]>[number]; onChange: (fields: Partial<NonNullable<Project["glossary"]>[number]>) => void }) {
-  const common = item.type?.trim().toLowerCase() === "common";
-  const targetOnly = common || ["yes", "true"].includes((item.extra_metadata?.target_only || "no").trim().toLowerCase());
+  const targetOnly = ["yes", "true"].includes((item.extra_metadata?.target_only || "no").trim().toLowerCase());
   const setTargetOnly = (checked: boolean) => {
     const extra_metadata = { ...item.extra_metadata };
     if (checked) extra_metadata.target_only = "yes";
@@ -1365,11 +1364,11 @@ function GlossaryMetadata({ item, onChange }: { item: NonNullable<Project["gloss
   };
   return <div className="glossary-metadata">
     <label>Type <input value={item.type || "Unknown"} aria-label="Loại thuật ngữ" onChange={(event) => onChange({ type: event.target.value, extended: true })} /></label>
-    <label title={common ? "Type Common luôn chỉ xuất bản dịch" : "Chỉ xuất phần đích, không giữ nguyên văn hoặc chú giải song ngữ"}><input type="checkbox" aria-label="Chỉ xuất bản dịch (target_only)" checked={targetOnly} disabled={common} onChange={(event) => setTargetOnly(event.target.checked)} /> Target only (chỉ xuất bản dịch)</label>
+    <label title="Chỉ xuất phần đích, không giữ nguyên văn hoặc chú giải song ngữ"><input type="checkbox" aria-label="Chỉ xuất bản dịch (target_only)" checked={targetOnly} onChange={(event) => setTargetOnly(event.target.checked)} /> Target only (chỉ xuất bản dịch)</label>
     <label><input type="checkbox" checked={Boolean(item.first_vi)} onChange={(event) => onChange({ first_vi: event.target.checked, ...(event.target.checked ? { first_en: false } : {}), extended: true })} /> Chú giải Việt lần đầu mỗi chương</label>
     <label><input type="checkbox" checked={Boolean(item.first_en)} onChange={(event) => onChange({ first_en: event.target.checked, ...(event.target.checked ? { first_vi: false } : {}), extended: true })} /> Chú giải English lần đầu mỗi chương</label>
     <label><input type="checkbox" checked={Boolean(item.brackets)} onChange={(event) => onChange({ brackets: event.target.checked, extended: true })} /> Ngoặc vuông</label>
-    <span>{targetOnly ? (common ? "Common: luôn dùng bản dịch" : "target_only=yes: chỉ dùng bản dịch") : item.extended ? "Giữ thuật ngữ English" : "Định dạng cũ: dịch nguồn → đích"}</span>
+    <span>{targetOnly ? "target_only=yes: chỉ dùng bản dịch" : item.extended ? "Hiển thị theo các cờ đã chọn" : "Định dạng cũ: dịch nguồn → đích"}</span>
   </div>;
 }
 

@@ -91,14 +91,11 @@ class GlossaryValidationTests(unittest.TestCase):
     def test_all_four_valid_cases(self):
         self.assertEqual(validate_glossary(VALID, self.entries), [])
 
-    def test_common_vietnamese_only_overrides_format_flags(self):
+    def test_common_obeys_format_flags_instead_of_overriding_them(self):
         entries = parse_glossary("Empire = Đế Quốc | type=Common | first_vi=yes | brackets=yes")
-        self.assertEqual(validate_glossary("Đế Quốc và Đế Quốc", entries, "Empire and Empire"), [])
-        for value in ("Empire", "empire", "[Empire] (Đế Quốc)"):
-            with self.subTest(value=value):
-                codes = {e.code for e in validate_glossary(value, entries)}
-                self.assertIn("common_requires_vietnamese", codes)
-        self.assertIn("common_plain_vietnamese", {e.code for e in validate_glossary("[Đế Quốc]", entries)})
+        self.assertEqual(validate_glossary("[Empire] (Đế Quốc) và [Empire]", entries, "Empire and Empire"), [])
+        self.assertIn("missing_first_annotation", {e.code for e in validate_glossary("[Empire]", entries)})
+        self.assertIn("vietnamese_without_canonical", {e.code for e in validate_glossary("Đế Quốc", entries)})
 
     def test_target_only_preserves_type_and_requires_plain_vietnamese(self):
         entries = parse_glossary("blood blade = huyết kiếm | type=Skill | first_vi=yes | brackets=yes | target_only=yes")
@@ -126,7 +123,7 @@ class GlossaryValidationTests(unittest.TestCase):
 
     def test_common_does_not_override_longer_named_term(self):
         entries = parse_glossary("House = Gia Tộc | type=common\nHouse Fenshore = Gia Tộc Fenshore | type=Name | first_vi=yes")
-        self.assertEqual(validate_glossary("House Fenshore (Gia Tộc Fenshore). Gia Tộc.", entries), [])
+        self.assertEqual(validate_glossary("House Fenshore (Gia Tộc Fenshore). House.", entries), [])
 
     def test_missing_brackets(self):
         self.assertIn("missing_brackets", self.codes("Awakened (Thức Tỉnh)"))

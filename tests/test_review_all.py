@@ -9,6 +9,8 @@ from cores.full_review import load_review_chapters, review_worker_count
 from cores.full_review import service as review_service
 from cores.full_review import runner as review_runner
 from cores.postprocess import build_translation_review_prompt
+from cores.postprocess import glossary_review_issues
+from cores.context.rules import GLOSSARY_RULES
 from cores.full_review import build_review_prompt, prepare_review_item, process_review_result
 
 
@@ -209,6 +211,32 @@ class ReviewAllTests(unittest.TestCase):
             build_review_prompt(*arguments),
             build_translation_review_prompt(*arguments, REVIEW_BG_CRITERIA),
         )
+
+    def test_review_prompt_contains_glossary_rules(self):
+        prompt = build_review_prompt(
+            "v1_c1_s1", 1, "原题", "Earth", "Tiêu đề", "Trái Đất",
+            "<GLOSSARY>\nEarth = Trái Đất | target_only=yes\n</GLOSSARY>",
+        )
+        self.assertIn("Quy tắc glossary bắt buộc khi review", prompt)
+        self.assertIn(GLOSSARY_RULES, prompt)
+
+    def test_review_glossary_validator_detects_target_only_violation(self):
+        issues = glossary_review_issues(
+            "Earth xuất hiện.",
+            "Earth appears.",
+            "<GLOSSARY>\nEarth = Trái Đất | type=Place | target_only=yes\n</GLOSSARY>",
+        )
+        self.assertIn("target_only_requires_vietnamese", {item["glossary_code"] for item in issues})
+
+    def test_review_glossary_validator_checks_target_only_title(self):
+        issues = glossary_review_issues(
+            "Nội dung.",
+            "Content.",
+            "<GLOSSARY>\nEarth = Trái Đất | target_only=yes\n</GLOSSARY>",
+            title="Earth",
+            raw_title="Earth",
+        )
+        self.assertIn("target_only_requires_vietnamese", {item["glossary_code"] for item in issues})
 
 
 if __name__ == "__main__":

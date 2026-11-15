@@ -36,6 +36,12 @@ describe("glossary metadata", () => {
     expect(entries[0]).toMatchObject({ type: "Skill", extra_metadata: { target_only: "yes" } });
     expect(parseGlossary(serializeGlossaryEntry(entries[0]))).toEqual(entries);
   });
+  it("makes Common obey display flags instead of overriding them", () => {
+    const entries = parseGlossary("Empire = Đế Quốc | type=Common | first_vi=yes | brackets=yes");
+    expect(validateGlossary("[Empire] (Đế Quốc) và [Empire]", entries, "Empire and Empire")).toEqual([]);
+    expect(validateGlossary("[Empire]", entries).join("\n")).toContain("missing_first_annotation");
+    expect(validateGlossary("Đế Quốc", entries).join("\n")).toContain("vietnamese_without_canonical");
+  });
   it("supports first_en as the mutually exclusive reverse of first_vi", () => {
     const entries = parseGlossary("Fate Essence = Tinh Hoa Vận Mệnh | type=Concept | first_en=yes | brackets=yes");
     const valid = "[Tinh Hoa Vận Mệnh] (Fate Essence) trào lên. [Tinh Hoa Vận Mệnh] dần lắng xuống.";

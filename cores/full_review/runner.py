@@ -9,6 +9,7 @@ from cores.full_review.service import (
     process_review_result,
 )
 from cores.full_review.storage import save_manual_check, save_review
+from cores.postprocess.review import add_glossary_review_issues
 from cores.stages import build_reference_documents
 from cores.translation.prompts import with_character_document_instruction
 
@@ -58,6 +59,14 @@ def run_review_items(
         if any(document["name"] == "characters.md" for document in documents):
             prompt = with_character_document_instruction(prompt)
         result = call_review_api(prompt, provider, documents)
+        add_glossary_review_issues(
+            result,
+            content,
+            raw_content,
+            context_text,
+            title=title,
+            raw_title=raw_title,
+        )
         return global_order, chapter_id, chapter_number, result
 
     def collect_result(future):

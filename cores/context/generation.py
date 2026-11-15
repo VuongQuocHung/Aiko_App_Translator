@@ -18,6 +18,19 @@ from cores.translation.prompts import wrap_r19_prompt
 TRANSPORT_OVERRIDES = {}
 
 
+DEFAULT_TASK = """Đọc kỹ toàn bộ các chương raw được cung cấp và đối chiếu với glossary hiện có trước khi trích xuất thuật ngữ.
+
+Trong quá trình phân tích, cần nhận diện:
+- bối cảnh, thể loại, hệ thống sức mạnh hoặc chuyên môn, tổ chức, chức vụ và cấp bậc;
+- nhân vật, tên đầy đủ, bí danh, danh hiệu, cách gọi và quan hệ giữa các nhân vật;
+- địa danh, vật phẩm, kỹ năng, phép thuật, chủng tộc, khái niệm riêng và các cụm từ lặp lại có nghĩa chuyên biệt;
+- ngữ cảnh sử dụng để phân biệt tên riêng hoặc thuật ngữ với từ phổ thông.
+
+Chỉ đưa vào glossary những mục cần giữ nhất quán khi dịch. Bỏ qua từ phổ thông, vật dụng đời thường, câu hoàn chỉnh và mục chỉ xuất hiện ngẫu nhiên mà không mang nghĩa riêng. Không suy diễn từ kiến thức ngoài văn bản. Khi dữ liệu chưa đủ chắc chắn, giữ nguyên từ nguồn hoặc không trích xuất.
+
+Giữ nguyên chính xác từ hoặc cụm từ nguồn ở vế trái. Vế phải là cách viết hoặc bản dịch tiếng Việt tự nhiên, phù hợp ngữ cảnh. Tôn trọng cách dịch đã có trong glossary; không tự đổi một mục cũ nếu văn bản mới không cung cấp bằng chứng rõ ràng. Tên riêng viết hoa từng âm tiết; danh từ và chức vị thông thường viết thường."""
+
+
 def context_provider():
     return stage_provider("context", get_option=option)
 
@@ -43,23 +56,20 @@ def build_glossary_prompt(chapters, old_glossary):
     if not content.strip():
         return ""
     old_glossary = strip_r19_terms(old_glossary)
-    return wrap_r19_prompt(f"""Bạn là chuyên gia xây dựng glossary cho bản dịch tiểu thuyết từ mọi ngôn ngữ nguồn sang tiếng Việt.
-Tự nhận diện ngôn ngữ và thể loại từ nội dung; không mặc định truyện thuộc thể loại fantasy.
+    return wrap_r19_prompt(f"""# Vai trò
+Bạn là biên tập viên chuyên phân tích ngữ cảnh và xây dựng bộ nhớ thuật ngữ cho bản dịch tiểu thuyết từ mọi ngôn ngữ nguồn sang tiếng Việt. Tự nhận diện ngôn ngữ và thể loại từ nội dung; không mặc định truyện thuộc thể loại fantasy.
 
-Trích xuất thuật ngữ, danh hiệu, xưng hô, tên riêng và địa danh cần giữ nhất quán.
-- Bỏ qua từ phổ thông và vật dụng đời thường.
-- Giữ nguyên chính xác từ/cụm từ nguồn ở vế trái.
-- Chỉ khôi phục tên La-tinh gốc khi có căn cứ chắc chắn.
-- Dịch thuật ngữ và danh hiệu sang tiếng Việt tự nhiên, thống nhất với glossary cũ.
-- Tên riêng viết hoa từng âm tiết; danh từ và chức vị thông thường viết thường.
+# Nhiệm vụ
+{DEFAULT_TASK}
 
-Glossary hiện có:
+# Glossary hiện có
 {old_glossary}
 
-Nội dung raw:
+# Nội dung raw cần phân tích
 {content}
 
-Chỉ xuất mỗi dòng theo dạng:
+# Định dạng đầu ra
+Chỉ xuất mỗi mục trên một dòng theo dạng:
 Nguyên văn = Bản dịch
 
 Bắt đầu bằng ###START### và kết thúc bằng ###END###.

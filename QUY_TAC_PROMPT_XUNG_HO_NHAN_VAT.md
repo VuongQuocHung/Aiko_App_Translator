@@ -398,9 +398,9 @@ Giả sử `Chain of Heart = Xiềng Xích Trái Tim`:
 | `first_en=yes`, `brackets=no` | `Xiềng Xích Trái Tim (Chain of Heart)` | `Xiềng Xích Trái Tim` |
 | Không first, `brackets=no` | `Chain of Heart` | `Chain of Heart` |
 | Không first, `brackets=yes` | `[Chain of Heart]` | `[Chain of Heart]` |
-| `type=Common` hoặc `target_only=yes` | `Xiềng Xích Trái Tim` | `Xiềng Xích Trái Tim` |
+| `target_only=yes` | `Xiềng Xích Trái Tim` | `Xiềng Xích Trái Tim` |
 
-`type=Common` và `target_only=yes` là ngoại lệ ưu tiên cao nhất: chỉ xuất bản dịch tiếng Việt, không giữ tiếng Anh, không chú giải song ngữ và không thêm ngoặc vuông. Chế độ này ghi đè `first_vi`, `first_en` và `brackets`.
+`target_only=yes` là ngoại lệ ưu tiên cao nhất: chỉ xuất bản dịch tiếng Việt, không giữ tiếng Anh, không chú giải song ngữ và không thêm ngoặc vuông. Chế độ này ghi đè `first_vi`, `first_en` và `brackets`. `type=Common` không còn là ngoại lệ hiển thị; nó chỉ phân loại thuật ngữ.
 
 ### 10.4. Quy tắc dữ liệu
 
@@ -541,7 +541,7 @@ Hệ quả:
 - Không khẳng định glossary luôn được lọc theo chương hiện tại và chương sau; đó không phải luồng desktop hiện tại.
 - Không coi `locked` là khóa một record; nó khóa cả cặp trong bước cập nhật tự động.
 - Không dùng `characters.md` như kho tóm tắt truyện không giới hạn; snapshot được đính kèm và tiêu tốn context.
-- Không dùng `type` để suy ra cách hiển thị ngoại trừ `Common`; với các type khác, `target_only`, `first_vi`, `first_en` và `brackets` mới quyết định hình thức.
+- Không dùng `type` để suy ra cách hiển thị; với mọi type kể cả `Common`, chỉ `target_only`, `first_vi`, `first_en` và `brackets` quyết định hình thức.
 - Không yêu cầu model tự đổi chính tả canonical để tránh lặp từ; glossary formatting ưu tiên hơn biến thể văn phong.
 - Không chèn lại `GLOSSARY FORMATTING RULES`; ứng dụng tự thêm bộ luật từ `defaults/glossary_rules.txt`.
 - Không yêu cầu “sửa mọi thứ” ở bước hiệu đính lần 2; code chỉ chấp nhận các edit gắn với issue review.

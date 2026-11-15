@@ -47,8 +47,7 @@ export function serializeGlossaryEntry(entry: GlossaryEntry) {
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const term = (text: string) => `(?<![\\p{L}\\p{N}_])${escape(text)}(?![\\p{L}\\p{N}_])`;
-const isTargetOnly = (entry: GlossaryEntry) => entry.type?.toLowerCase() === "common"
-  || ["yes", "true"].includes((entry.extra_metadata?.target_only || "no").trim().toLowerCase());
+const isTargetOnly = (entry: GlossaryEntry) => ["yes", "true"].includes((entry.extra_metadata?.target_only || "no").trim().toLowerCase());
 const bodies = (text: string) => {
   const parts = text.split(/^[ \t]*(?:#{1,6}[ \t]*)?(?:chapter|chương|section)[ \t]*\d+[^\n]*\n?/gimu);
   if (!parts[0].trim() && parts.length > 1) parts.shift();
@@ -103,9 +102,8 @@ export function validateGlossary(text: string, entries: GlossaryEntry[], source 
         continue;
       }
       if (isTargetOnly(entry)) {
-        const prefix = entry.type?.toLowerCase() === "common" ? "common" : "target_only";
-        if (entry.source.toLowerCase() !== entry.target.toLowerCase()) report(entry, `${prefix}_requires_vietnamese`, start);
-        else if (bracketed || annotation) report(entry, `${prefix}_plain_vietnamese`, start);
+        if (entry.source.toLowerCase() !== entry.target.toLowerCase()) report(entry, "target_only_requires_vietnamese", start);
+        else if (bracketed || annotation) report(entry, "target_only_plain_vietnamese", start);
         continue;
       }
       if (entry.first_en) { report(entry, "english_without_vietnamese", start); continue; }
@@ -131,10 +129,7 @@ export function validateGlossary(text: string, entries: GlossaryEntry[], source 
         const start = match.index!, end = start + match[0].length;
         if (protectedSpans.some(([a, b]) => a < end && start < b)) continue;
         if (!isTargetOnly(entry)) report(entry, "vietnamese_without_canonical", start);
-        else if (body[start - 1] === "[" && body[end] === "]") {
-          const prefix = entry.type?.toLowerCase() === "common" ? "common" : "target_only";
-          report(entry, `${prefix}_plain_vietnamese`, start);
-        }
+        else if (body[start - 1] === "[" && body[end] === "]") report(entry, "target_only_plain_vietnamese", start);
         protectedSpans.push([start, end]);
       }
     }
